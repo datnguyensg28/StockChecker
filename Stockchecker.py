@@ -25,10 +25,21 @@ mb52_source = st.sidebar.radio(
     "Chọn nguồn dữ liệu tồn kho",
     ["☁️ MB52 mặc định (Datnd5 update)", "📂 Upload file MB52"]
 )
+def find_mb52_path():
+    data_dir = "data"
+    if not os.path.exists(data_dir):
+        return None
+
+    for f in os.listdir(data_dir):
+        if f.lower() == "mb52.xlsx":
+            return os.path.join(data_dir, f)
+    return None
 
 # =====================================================
 # LOAD MB52
 # =====================================================
+
+
 @st.cache_data(show_spinner="🔄 Đang đọc MB52...")
 def load_mb52_from_file(file):
     df = pd.read_excel(file)
@@ -51,13 +62,14 @@ if mb52_source == "📂 Upload file MB52":
     mb52_df = load_mb52_from_file(mb52_upload)
 
 else:
-    mb52_path = os.path.join("data", "MB52.xlsx")
-    if not os.path.exists(mb52_path):
+    mb52_path = find_mb52_path()
+    if not mb52_path:
         st.error("❌ Không tìm thấy MB52.xlsx trong thư mục data/")
         st.stop()
 
     mb52_df = load_mb52_from_file(mb52_path)
 
+    
     upload_time = datetime.datetime.fromtimestamp(
         os.path.getmtime(mb52_path)
     ).strftime("%d/%m/%Y %H:%M")
