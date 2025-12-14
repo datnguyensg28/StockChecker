@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 import io
+import datetime
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
@@ -16,34 +17,68 @@ st.set_page_config(
 st.title("📦 PHẦN MỀM KIỂM TRA KHẢ NĂNG XUẤT KHO")
 
 # =====================================================
-# LOAD MB52 (CACHE – RẤT QUAN TRỌNG CHO FILE LỚN)
+# SIDEBAR – NGUỒN MB52
+# =====================================================
+st.sidebar.header("📦 NGUỒN TỒN KHO (MB52)")
+
+mb52_source = st.sidebar.radio(
+    "Chọn nguồn dữ liệu tồn kho",
+    ["☁️ MB52 mặc định (Datnd5 update)", "📂 Upload file MB52"]
+)
+
+# =====================================================
+# LOAD MB52
 # =====================================================
 @st.cache_data(show_spinner="🔄 Đang đọc MB52...")
-def load_mb52():
-    path = os.path.join(os.getcwd(), "MB52.xlsx")
-    if not os.path.exists(path):
-        st.error("❌ Không tìm thấy MB52.xlsx")
+def load_mb52_from_file(file):
+    df = pd.read_excel(file)
+    df["Unrestricted"] = pd.to_numeric(df["Unrestricted"], errors="coerce").fillna(0)
+    return df.groupby(
+        ["Material", "Plant", "WBS Element"],
+        as_index=False
+    )["Unrestricted"].sum()
+
+
+if mb52_source == "📂 Upload file MB52":
+    mb52_upload = st.sidebar.file_uploader(
+        "Upload MB52.xlsx",
+        type=["xlsx"]
+    )
+    if not mb52_upload:
+        st.warning("⚠️ Vui lòng upload file MB52")
         st.stop()
 
-    df = pd.read_excel(path)
-    df["Unrestricted"] = pd.to_numeric(df["Unrestricted"], errors="coerce").fillna(0)
+    mb52_df = load_mb52_from_file(mb52_upload)
 
-    return (
-        df.groupby(["Material", "Plant", "WBS Element"], as_index=False)["Unrestricted"]
-        .sum()
+else:
+    mb52_path = os.path.join("data", "MB52.xlsx")
+    if not os.path.exists(mb52_path):
+        st.error("❌ Không tìm thấy MB52.xlsx trong thư mục data/")
+        st.stop()
+
+    mb52_df = load_mb52_from_file(mb52_path)
+
+    upload_time = datetime.datetime.fromtimestamp(
+        os.path.getmtime(mb52_path)
+    ).strftime("%d/%m/%Y %H:%M")
+
+    st.info(
+        f"ℹ️ **Lưu ý:** Tồn kho hiển thị được tính tại thời điểm "
+        f"file MB52 upload lên server vào lúc: **{upload_time}**. "
+        f"Dữ liệu không phản ánh tồn kho realtime."
     )
 
-mb52_df = load_mb52()
+# =====================================================
+# UPLOAD PHIẾU XUẤT
+# =====================================================
+st.markdown("### 📂 Upload file phiếu xuất kho")
 
-# =====================================================
-# UI – UPLOAD FILE
-# =====================================================
-uploaded_file = st.file_uploader(
-    "📂 Upload file phiếu xuất kho",
+issue_file = st.file_uploader(
+    "Upload file phiếu xuất kho",
     type=["xlsx", "xls"]
 )
 
-if not uploaded_file:
+if not issue_file:
     st.stop()
 
 @st.cache_data(show_spinner="🔄 Đang đọc file phiếu...")
@@ -53,17 +88,14 @@ def load_issue(file):
     df["Actual Quantity"] = pd.to_numeric(df.get("Actual Quantity", 0), errors="coerce").fillna(0)
     return df
 
-issue_df = load_issue(uploaded_file)
+issue_df = load_issue(issue_file)
 
 # =====================================================
-# SIDEBAR – TÙY CHỌN
+# SIDEBAR – TUỲ CHỌN
 # =====================================================
-st.sidebar.header("⚙️ TÙY CHỌN")
+st.sidebar.header("⚙️ TUỲ CHỌN TÍNH TOÁN")
 
-use_sequential = st.sidebar.checkbox(
-    "Bật LUỸ KẾ TỒN KHO",
-    value=False
-)
+use_sequential = st.sidebar.checkbox("🔁 Bật LUỸ KẾ TỒN KHO")
 
 sort_option = st.sidebar.selectbox(
     "Sắp xếp phiếu theo",
@@ -72,98 +104,96 @@ sort_option = st.sidebar.selectbox(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🔍 LỌC NHANH")
+st.sidebar.header("🔍 LỌC REALTIME")
 
 filter_material = st.sidebar.text_input("Mã vật tư")
 filter_wbs = st.sidebar.text_input("Source WBS")
 filter_plant = st.sidebar.text_input("Plant")
 
 # =====================================================
-# DATA PREP
+# MAP TỒN KHO
 # =====================================================
 stock_map = mb52_df.set_index(
     ["Material", "Plant", "WBS Element"]
 )["Unrestricted"].to_dict()
 
 # =====================================================
-# SORT FUNCTION
+# SORT
 # =====================================================
 def sort_pending(df, option):
     if option == "Ngày phiếu" and "Request Date" in df.columns:
-        return df.sort_values(by=["Request Date", "Request Number"])
+        return df.sort_values(["Request Date", "Request Number"])
     if option == "Mức ưu tiên" and "Priority" in df.columns:
-        return df.sort_values(by=["Priority", "Request Number"])
-    return df.sort_values(by=["Request Number"])
+        return df.sort_values(["Priority", "Request Number"])
+    return df.sort_values("Request Number")
 
 # =====================================================
-# SIMPLE MODE
+# TÍNH THƯỜNG
 # =====================================================
 def build_simple_report(df):
-    result = df.copy()
+    r = df.copy()
 
-    result["Tồn kho ban đầu"] = result.apply(
-        lambda r: stock_map.get(
-            (r["Material Number"], r["Plant"], r["Source WBS"]), 0
+    r["Tồn kho ban đầu"] = r.apply(
+        lambda x: stock_map.get(
+            (x["Material Number"], x["Plant"], x["Source WBS"]), 0
         ),
         axis=1
     )
+    r["Tồn kho còn lại"] = r["Tồn kho ban đầu"]
+    r["Âm tồn"] = ""
 
-    result["Tồn kho còn lại"] = result["Tồn kho ban đầu"]
-    result["Âm tồn"] = ""
+    def status(x):
+        if x["Status"] == 12:
+            return "XUẤT ĐỦ" if x["Transfer Quantity"] == x["Actual Quantity"] else "KHÔNG ĐỦ"
+        return "ĐẢM BẢO" if x["Transfer Quantity"] <= x["Tồn kho ban đầu"] else "KHÔNG ĐẢM BẢO"
 
-    def status(r):
-        if r["Status"] == 12:
-            return "XUẤT ĐỦ" if r["Transfer Quantity"] == r["Actual Quantity"] else "KHÔNG ĐỦ"
-        return "ĐẢM BẢO" if r["Transfer Quantity"] <= r["Tồn kho ban đầu"] else "KHÔNG ĐẢM BẢO"
-
-    result["Report Status"] = result.apply(status, axis=1)
-    return result
+    r["Report Status"] = r.apply(status, axis=1)
+    return r
 
 # =====================================================
-# SEQUENTIAL MODE (NÂNG CAO)
+# LUỸ KẾ
 # =====================================================
 def build_sequential_report(df):
-    result = df.copy()
+    r = df.copy()
     pending = df[df["Status"].isin([1, 5, 9])].copy()
     pending = sort_pending(pending, sort_option)
 
-    init_stock = stock_map.copy()
     remaining = stock_map.copy()
 
-    result["Tồn kho ban đầu"] = 0
-    result["Tồn kho còn lại"] = 0
-    result["Âm tồn"] = ""
+    r["Tồn kho ban đầu"] = 0
+    r["Tồn kho còn lại"] = 0
+    r["Âm tồn"] = ""
 
     for idx, row in pending.iterrows():
         key = (row["Material Number"], row["Plant"], row["Source WBS"])
-        init_qty = init_stock.get(key, 0)
+        init_qty = stock_map.get(key, 0)
         remain = remaining.get(key, 0)
 
         if row["Transfer Quantity"] <= remain:
-            result.at[idx, "Report Status"] = "ĐẢM BẢO"
+            r.at[idx, "Report Status"] = "ĐẢM BẢO"
             remaining[key] = remain - row["Transfer Quantity"]
         else:
-            result.at[idx, "Report Status"] = "KHÔNG ĐẢM BẢO"
-            result.at[idx, "Âm tồn"] = "⚠️"
+            r.at[idx, "Report Status"] = "KHÔNG ĐẢM BẢO"
+            r.at[idx, "Âm tồn"] = "⚠️"
 
-        result.at[idx, "Tồn kho ban đầu"] = init_qty
-        result.at[idx, "Tồn kho còn lại"] = remaining.get(key, remain)
+        r.at[idx, "Tồn kho ban đầu"] = init_qty
+        r.at[idx, "Tồn kho còn lại"] = remaining.get(key, remain)
 
-    result.loc[result["Status"] == 12, "Report Status"] = result.apply(
-        lambda r: "XUẤT ĐỦ" if r["Transfer Quantity"] == r["Actual Quantity"] else "KHÔNG ĐỦ",
+    r.loc[r["Status"] == 12, "Report Status"] = r.apply(
+        lambda x: "XUẤT ĐỦ" if x["Transfer Quantity"] == x["Actual Quantity"] else "KHÔNG ĐỦ",
         axis=1
     )
 
-    return result
+    return r
 
 # =====================================================
-# BUILD REPORTS
+# BUILD
 # =====================================================
 simple_report = build_simple_report(issue_df)
 sequential_report = build_sequential_report(issue_df)
 
 # =====================================================
-# FILTER FUNCTION (REALTIM)
+# FILTER
 # =====================================================
 def apply_filter(df):
     if filter_material:
@@ -180,7 +210,7 @@ sequential_report = apply_filter(sequential_report)
 # =====================================================
 # DISPLAY
 # =====================================================
-display_cols = [
+cols = [
     "Request Number",
     "Material Number",
     "Material Description",
@@ -200,13 +230,13 @@ display_cols = [
 
 st.subheader("📊 BÁO CÁO KIỂM TRA")
 
-tab1, tab2 = st.tabs(["📄 TÍNH THƯỜNG", "📊 LUỸ KẾ"])
+tab1, tab2 = st.tabs(["📄 TÍNH TOÁN TỪNG PHIẾU XUẤT KHO", "📊 TÍNH THEO LUỸ KẾ"])
 
 with tab1:
-    st.dataframe(simple_report[display_cols], use_container_width=True)
+    st.dataframe(simple_report[cols], use_container_width=True)
 
 with tab2:
-    st.dataframe(sequential_report[display_cols], use_container_width=True)
+    st.dataframe(sequential_report[cols], use_container_width=True)
 
 # =====================================================
 # EXPORT
@@ -241,16 +271,16 @@ def export_excel(df):
     return out
 
 st.markdown("---")
-col1, col2 = st.columns(2)
+c1, c2 = st.columns(2)
 
-with col1:
+with c1:
     st.download_button(
         "📥 Export báo cáo TÍNH THƯỜNG",
         export_excel(simple_report),
         "BAO_CAO_TINH_THUONG.xlsx"
     )
 
-with col2:
+with c2:
     st.download_button(
         "📥 Export báo cáo LUỸ KẾ",
         export_excel(sequential_report),
