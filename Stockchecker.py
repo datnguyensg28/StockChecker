@@ -33,7 +33,23 @@ def find_mb52_path():
 @st.cache_data(show_spinner="🔄 Đang đọc MB52...")
 def load_mb52(file):
     df = pd.read_excel(file)
-    df["Unrestricted"] = pd.to_numeric(df["Unrestricted"], errors="coerce").fillna(0)
+
+    # 🔍 TỰ ĐỘNG DÒ CỘT STORAGE LOCATION
+    sloc_candidates = [
+        c for c in df.columns
+        if "storage" in c.lower() and "location" in c.lower()
+    ]
+    if not sloc_candidates:
+        st.error("❌ Không tìm thấy cột Storage Location trong MB52")
+        st.stop()
+
+    sloc_col = sloc_candidates[0]
+    df.rename(columns={sloc_col: "Storage Location"}, inplace=True)
+
+    df["Unrestricted"] = pd.to_numeric(
+        df["Unrestricted"], errors="coerce"
+    ).fillna(0)
+
     return df
 
 if mb52_source == "📂 Upload file MB52":
@@ -56,22 +72,41 @@ else:
     st.info(f"ℹ️ Tồn kho tại thời điểm upload MB52 (giờ VN): **{upload_time}**")
 
 # =====================================================
-# MAP TỒN KHO
+# MAP TỒN KHO 5 TẦNG
 # =====================================================
-stock_wbs = mb52_raw.groupby(
-    ["Material", "Plant", "WBS Element"], as_index=False
-)["Unrestricted"].sum()
+map_da_cn = mb52_raw.groupby(
+    ["Material", "Plant", "Storage Location", "WBS Element"],
+    as_index=False
+)["Unrestricted"].sum().set_index(
+    ["Material", "Plant", "Storage Location", "WBS Element"]
+)["Unrestricted"].to_dict()
 
-stock_total = mb52_raw.groupby(
-    ["Material", "Plant"], as_index=False
-)["Unrestricted"].sum()
-
-map_wbs = stock_wbs.set_index(
+map_da_tinh = mb52_raw.groupby(
+    ["Material", "Plant", "WBS Element"],
+    as_index=False
+)["Unrestricted"].sum().set_index(
     ["Material", "Plant", "WBS Element"]
 )["Unrestricted"].to_dict()
 
-map_total = stock_total.set_index(
+map_cn = mb52_raw.groupby(
+    ["Material", "Plant", "Storage Location"],
+    as_index=False
+)["Unrestricted"].sum().set_index(
+    ["Material", "Plant", "Storage Location"]
+)["Unrestricted"].to_dict()
+
+map_tinh = mb52_raw.groupby(
+    ["Material", "Plant"],
+    as_index=False
+)["Unrestricted"].sum().set_index(
     ["Material", "Plant"]
+)["Unrestricted"].to_dict()
+
+map_kv = mb52_raw.groupby(
+    ["Material"],
+    as_index=False
+)["Unrestricted"].sum().set_index(
+    ["Material"]
 )["Unrestricted"].to_dict()
 
 # =====================================================
@@ -79,40 +114,33 @@ map_total = stock_total.set_index(
 # =====================================================
 st.markdown("### 📂 Upload file phiếu xuất kho")
 
-issue_file = st.file_uploader("Upload file phiếu xuất kho", type=["xlsx", "xls"])
+issue_file = st.file_uploader(
+    "Upload file phiếu xuất kho", type=["xlsx", "xls"]
+)
 if not issue_file:
     st.stop()
 
 @st.cache_data(show_spinner="🔄 Đang đọc file phiếu...")
 def load_issue(file):
     df = pd.read_excel(file)
-    df["Transfer Quantity"] = pd.to_numeric(df["Transfer Quantity"], errors="coerce").fillna(0)
-    df["Actual Quantity"] = pd.to_numeric(df.get("Actual Quantity", 0), errors="coerce").fillna(0)
+    df["Transfer Quantity"] = pd.to_numeric(
+        df["Transfer Quantity"], errors="coerce"
+    ).fillna(0)
+    df["Actual Quantity"] = pd.to_numeric(
+        df.get("Actual Quantity", 0), errors="coerce"
+    ).fillna(0)
     return df
 
 issue_df = load_issue(issue_file)
 
 # =====================================================
-# SIDEBAR – TÙY CHỌN
-# =====================================================
-st.sidebar.header("⚙️ TUỲ CHỌN TÍNH TOÁN")
-use_sequential = st.sidebar.checkbox("🔁 Bật LUỸ KẾ TỒN KHO")
-
-sort_option = st.sidebar.selectbox(
-    "Sắp xếp phiếu theo",
-    ["Request Number", "Ngày phiếu", "Mức ưu tiên"],
-    disabled=not use_sequential
-)
-
-# =====================================================
-# SIDEBAR – LỌC REALTIME (CHECKBOX)
+# SIDEBAR – LỌC REALTIME (GIỮ NGUYÊN)
 # =====================================================
 st.sidebar.markdown("---")
 st.sidebar.header("🔍 LỌC REALTIME")
 
 filter_material = st.sidebar.text_input("Mã vật tư")
 
-# Functional Location (checkbox + search)
 st.sidebar.markdown("**Functional Location**")
 fl_search = st.sidebar.text_input("🔍 Tìm nhanh FL")
 
@@ -122,91 +150,82 @@ if fl_search:
 
 filter_fl = st.sidebar.multiselect("Chọn FL", all_fl)
 
-# Plant checkbox
 filter_plant = st.sidebar.multiselect(
-    "Plant",
-    sorted(issue_df["Plant"].dropna().unique())
+    "Plant", sorted(issue_df["Plant"].dropna().unique())
 )
 
-# Status checkbox
 filter_status = st.sidebar.multiselect(
     "Tình trạng xuất kho",
     ["ĐẢM BẢO", "KHÔNG ĐẢM BẢO", "XUẤT ĐỦ", "KHÔNG ĐỦ"]
 )
 
 # =====================================================
-# SORT
+# LUỸ KẾ 5 TẦNG
 # =====================================================
-def sort_pending(df):
-    if sort_option == "Ngày phiếu" and "Request Date" in df.columns:
-        return df.sort_values(["Request Date", "Request Number"])
-    if sort_option == "Mức ưu tiên" and "Priority" in df.columns:
-        return df.sort_values(["Priority", "Request Number"])
-    return df.sort_values("Request Number")
-
-# =====================================================
-# TÍNH THƯỜNG
-# =====================================================
-def build_simple(df):
+def build_sequential_5_layer(df):
     r = df.copy()
 
-    r["Tồn kho WBS"] = r.apply(
-        lambda x: map_wbs.get(
-            (x["Material Number"], x["Plant"], x["Source WBS"]), 0
-        ), axis=1
-    )
+    remain_da_cn = map_da_cn.copy()
+    remain_da_tinh = map_da_tinh.copy()
+    remain_cn = map_cn.copy()
+    remain_tinh = map_tinh.copy()
+    
 
-    r["Tồn kho tổng"] = r.apply(
-        lambda x: map_total.get(
-            (x["Material Number"], x["Plant"]), 0
-        ), axis=1
-    )
+    r["Tầng đáp ứng"] = ""
+    r["Gợi ý chuyển WBS"] = ""
+    r["Report Status"] = ""
+    r["Thiếu kho"] = False
 
-    def status(x):
-        if x["Status"] == 12:
-            return "XUẤT ĐỦ" if x["Transfer Quantity"] == x["Actual Quantity"] else "KHÔNG ĐỦ"
-        return "ĐẢM BẢO" if x["Transfer Quantity"] <= x["Tồn kho WBS"] else "KHÔNG ĐẢM BẢO"
+    for idx, row in r.iterrows():
+        qty = row["Transfer Quantity"]
+        mat = row["Material Number"]
+        plant = row["Plant"]
+        sloc = row["Sending Sloc"]
+        wbs = row["Source WBS"]
 
-    r["Report Status"] = r.apply(status, axis=1)
+        r.at[idx, "Tồn kho DA CN"] = remain_da_cn.get((mat, plant, sloc, wbs), 0)
+        r.at[idx, "Tồn kho DA Tỉnh"] = remain_da_tinh.get((mat, plant, wbs), 0)
+        r.at[idx, "Tồn kho CN"] = remain_cn.get((mat, plant, sloc), 0)
+        r.at[idx, "Tồn kho Tỉnh"] = remain_tinh.get((mat, plant), 0)
+        r.at[idx, "Tồn kho Khu vực"] = map_kv.get(mat, 0)
 
-    r["Gợi ý chuyển WBS"] = r.apply(
-        lambda x:
-        "🧠 Có thể chuyển WBS nội bộ"
-        if x["Report Status"] == "KHÔNG ĐẢM BẢO"
-        and x["Transfer Quantity"] <= x["Tồn kho tổng"]
-        else "",
-        axis=1
-    )
+        layers = [
+            ("Kho DA CN", remain_da_cn, (mat, plant, sloc, wbs)),
+            ("Kho DA Tỉnh", remain_da_tinh, (mat, plant, wbs)),
+            ("Kho CN", remain_cn, (mat, plant, sloc)),
+            ("Kho Tỉnh", remain_tinh, (mat, plant))
+            
+        ]
 
-    r["Thiếu kho"] = r["Report Status"] == "KHÔNG ĐẢM BẢO"
+        allocated = False
+        for name, store, key in layers:
+            cur = store.get(key, 0)
+            if qty <= cur:
+                store[key] = cur - qty
+                allocated = True
+                r.at[idx, "Tầng đáp ứng"] = name
+                r.at[idx, "Report Status"] = "ĐẢM BẢO"
+                if name != "Kho DA CN":
+                    r.at[idx, "Gợi ý chuyển WBS"] = f"🧠 Có thể chuyển từ {name}"
+                break
+
+        if not allocated:
+            kv_qty = map_kv.get(mat, 0)
+
+            if qty <= kv_qty:
+                r.at[idx, "Tầng đáp ứng"] = "Kho Khu vực (tham chiếu)"
+                r.at[idx, "Report Status"] = "ĐẢM BẢO"
+                r.at[idx, "Gợi ý chuyển WBS"] = "🧠 Có thể điều chuyển từ kho khu vực"
+            else:
+                r.at[idx, "Report Status"] = "KHÔNG ĐẢM BẢO"
+                r.at[idx, "Thiếu kho"] = True
+                r.at[idx, "Gợi ý chuyển WBS"] = "🚚 Thiếu toàn bộ các tầng kho"
+
+
     return r
 
 # =====================================================
-# LUỸ KẾ
-# =====================================================
-def build_sequential(df):
-    r = build_simple(df)
-    pending = r[r["Status"].isin([1, 5, 9])].copy()
-    pending = sort_pending(pending)
-
-    remain = map_wbs.copy()
-
-    for idx, row in pending.iterrows():
-        key = (row["Material Number"], row["Plant"], row["Source WBS"])
-        cur = remain.get(key, 0)
-
-        if row["Transfer Quantity"] <= cur:
-            remain[key] = cur - row["Transfer Quantity"]
-        else:
-            r.at[idx, "Thiếu kho"] = True
-
-    return r
-
-simple_report = build_simple(issue_df)
-sequential_report = build_sequential(issue_df)
-
-# =====================================================
-# FILTER APPLY
+# APPLY FILTER
 # =====================================================
 def apply_filter(df):
     if filter_material:
@@ -219,8 +238,10 @@ def apply_filter(df):
         df = df[df["Report Status"].isin(filter_status)]
     return df
 
-simple_report = apply_filter(simple_report)
-sequential_report = apply_filter(sequential_report)
+# =====================================================
+# BUILD REPORT
+# =====================================================
+sequential_report = apply_filter(build_sequential_5_layer(issue_df))
 
 # =====================================================
 # DISPLAY
@@ -231,31 +252,34 @@ cols = [
     "Material Description",
     "Plant",
     "Source WBS",
+    "Sending Sloc",
     "Functional Location",
     "Transfer Quantity",
-    "Tồn kho WBS",
-    "Tồn kho tổng",
+    "Tồn kho DA CN",
+    "Tồn kho DA Tỉnh",
+    "Tồn kho CN",
+    "Tồn kho Tỉnh",
+    "Tồn kho Khu vực",
+    "Tầng đáp ứng",
     "Report Status",
     "Gợi ý chuyển WBS"
 ]
 
 st.subheader("📊 BÁO CÁO KIỂM TRA")
 
-tab1, tab2 = st.tabs(["📄 TÍNH THƯỜNG", "📊 LUỸ KẾ"])
-
-with tab1:
-    st.dataframe(simple_report[cols], use_container_width=True)
-
-with tab2:
-    st.dataframe(sequential_report[cols], use_container_width=True)
+st.dataframe(sequential_report[cols], use_container_width=True)
 
 # =====================================================
 # TỔNG HỢP THIẾU KHO THEO FL
 # =====================================================
 st.markdown("### 📊 TỔNG HỢP THIẾU KHO THEO FUNCTIONAL LOCATION")
 
-summary = simple_report[simple_report["Thiếu kho"]].groupby(
+summary = sequential_report[
+    sequential_report["Thiếu kho"]
+].groupby(
     "Functional Location"
-).size().reset_index(name="Số dòng thiếu kho")
+).size().reset_index(
+    name="Số dòng thiếu kho"
+)
 
 st.dataframe(summary, use_container_width=True)
