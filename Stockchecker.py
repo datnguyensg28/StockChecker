@@ -70,13 +70,15 @@ else:
     mb52_df = load_mb52_from_file(mb52_path)
 
     
-    upload_time = datetime.datetime.fromtimestamp(
-        os.path.getmtime(mb52_path)
+    upload_time = (
+    datetime.datetime.utcfromtimestamp(os.path.getmtime(mb52_path))
+    + datetime.timedelta(hours=7)
     ).strftime("%d/%m/%Y %H:%M")
 
     st.info(
         f"ℹ️ **Lưu ý:** Tồn kho hiển thị được tính tại thời điểm "
-        f"file MB52 upload lên server vào lúc: **{upload_time}**. "
+        f"file MB52 upload lên server (giờ Việt Nam) vào lúc: "
+        f"**{upload_time}**. "
         f"Dữ liệu không phản ánh tồn kho realtime."
     )
 
