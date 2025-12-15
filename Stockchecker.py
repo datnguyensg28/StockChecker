@@ -10,7 +10,7 @@ from openpyxl.styles import PatternFill
 # PAGE CONFIG
 # =====================================================
 st.set_page_config(page_title="Stock Checker", layout="wide")
-st.title("📦 PHẦN MỀM KIỂM TRA KHẢ NĂNG XUẤT KHO - MỘT SẢN PHẨM MIỄN PHÍ TỪ DATND5")
+st.title("📦 PHẦN MỀM KIỂM TRA KHẢ NĂNG XUẤT KHO V1.0- MỘT SẢN PHẨM MIỄN PHÍ TỪ DATND5")
 
 # =====================================================
 # SIDEBAR – NGUỒN MB52
