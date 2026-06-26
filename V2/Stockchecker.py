@@ -1,4 +1,4 @@
-﻿# =====================================================
+# =====================================================
 # STOCKFLOW CHECKER - KIEM TRA DAM BAO XUAT KHO
 # Author: DatND5
 # Version: 3.0 Streamlit
@@ -20,7 +20,7 @@ from openpyxl.utils import get_column_letter
 # =====================================================
 st.set_page_config(
     page_title="StockFlow Checker",
-    page_icon="ðŸ“¦",
+    page_icon="📦",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -33,7 +33,7 @@ DEFAULT_MB52_RAW_URL = "https://raw.githubusercontent.com/datnguyensg28/StockChe
 LOCAL_MB52_PATH = "data/MB52.XLSX"
 
 APP_NAME = "StockFlow Checker"
-APP_SUBTITLE = "Kiá»ƒm tra phiáº¿u xuáº¥t kho theo tráº¡ng thÃ¡i thá»±c xuáº¥t vÃ  tá»“n kho MB52"
+APP_SUBTITLE = "Kiểm tra phiếu xuất kho theo trạng thái thực xuất và tồn kho MB52"
 APP_VERSION = "3.0"
 
 REQUIRED_MB52_COLUMNS = ["Material", "Plant", "Unrestricted", "WBS Element"]
@@ -59,17 +59,17 @@ DETAIL_COLUMNS = [
     "Transfer Quantity",
     "Actual Quantity",
     "Status",
-    "CÃ²n thiáº¿u",
-    "TÃ¬nh tráº¡ng",
-    "Gá»£i Ã½ xá»­ lÃ½",
+    "Còn thiếu",
+    "Tình trạng",
+    "Gợi ý xử lý",
 ]
 
 STOCK_COLUMNS = [
-    "Tá»“n kho DA CN",
-    "Tá»“n kho DA Tá»‰nh",
-    "Tá»“n kho CN",
-    "Tá»“n kho Tá»‰nh",
-    "Tá»“n kho Khu vá»±c",
+    "Tồn kho DA CN",
+    "Tồn kho DA Tỉnh",
+    "Tồn kho CN",
+    "Tồn kho Tỉnh",
+    "Tồn kho Khu vực",
 ]
 
 
@@ -176,7 +176,7 @@ def normalize_column_name(value: Any) -> str:
 
 
 def stop_with_missing_columns(missing: list[str], file_label: str) -> None:
-    st.error(f"âŒ File {file_label} thiáº¿u cá»™t báº¯t buá»™c: {', '.join(missing)}")
+    st.error(f"❌ File {file_label} thiếu cột bắt buộc: {', '.join(missing)}")
     st.stop()
 
 
@@ -217,8 +217,8 @@ def detect_column_by_name_or_position(
         return df.columns[zero_based_index]
 
     st.error(
-        f"âŒ KhÃ´ng tÃ¬m tháº¥y cá»™t {display_name}. "
-        f"HÃ£y Ä‘áº·t tÃªn cá»™t lÃ  {accepted_names[0]} hoáº·c Ä‘áº·t Ä‘Ãºng vá»‹ trÃ­ cá»™t Excel."
+        f"❌ Không tìm thấy cột {display_name}. "
+        f"Hãy đặt tên cột là {accepted_names[0]} hoặc đặt đúng vị trí cột Excel."
     )
     st.stop()
 
@@ -236,10 +236,10 @@ def is_exported_status(value: Any) -> bool:
     return normalize_status(value) == "12"
 
 
-@st.cache_data(ttl=300, show_spinner="Äang táº£i MB52 má»›i nháº¥t tá»« GitHub...")
+@st.cache_data(ttl=300, show_spinner="Đang tải MB52 mới nhất từ GitHub...")
 def download_mb52_from_github(raw_url: str) -> Tuple[bytes, Dict[str, str]]:
     if not raw_url:
-        raise ValueError("ChÆ°a cáº¥u hÃ¬nh GitHub Raw URL MB52.")
+        raise ValueError("Chưa cấu hình GitHub Raw URL MB52.")
 
     headers = {
         "Cache-Control": "no-cache",
@@ -250,7 +250,7 @@ def download_mb52_from_github(raw_url: str) -> Tuple[bytes, Dict[str, str]]:
     response.raise_for_status()
 
     meta = {
-        "source": "GitHub - MB52 má»›i nháº¥t",
+        "source": "GitHub - MB52 mới nhất",
         "url": raw_url,
         "loaded_at": datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
         "last_modified": response.headers.get("Last-Modified", ""),
@@ -259,7 +259,7 @@ def download_mb52_from_github(raw_url: str) -> Tuple[bytes, Dict[str, str]]:
     return response.content, meta
 
 
-@st.cache_data(show_spinner="Äang Ä‘á»c MB52 local...")
+@st.cache_data(show_spinner="Đang đọc MB52 local...")
 def read_local_mb52(path: str) -> Tuple[bytes, Dict[str, str]]:
     with open(path, "rb") as file:
         content = file.read()
@@ -273,13 +273,13 @@ def read_local_mb52(path: str) -> Tuple[bytes, Dict[str, str]]:
     return content, meta
 
 
-@st.cache_data(show_spinner="Äang Ä‘á»c MB52...")
+@st.cache_data(show_spinner="Đang đọc MB52...")
 def load_mb52(file_bytes: bytes) -> pd.DataFrame:
     df = pd.read_excel(io.BytesIO(file_bytes))
 
     sloc_col = detect_storage_location_column(df)
     if not sloc_col:
-        st.error("âŒ KhÃ´ng tÃ¬m tháº¥y cá»™t Storage Location trong MB52.")
+        st.error("❌ Không tìm thấy cột Storage Location trong MB52.")
         st.stop()
     if sloc_col != "Storage Location":
         df = df.rename(columns={sloc_col: "Storage Location"})
@@ -293,16 +293,16 @@ def load_mb52(file_bytes: bytes) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(show_spinner="Äang Ä‘á»c file phiáº¿u xuáº¥t kho...")
+@st.cache_data(show_spinner="Đang đọc file phiếu xuất kho...")
 def load_issue(file_bytes: bytes) -> pd.DataFrame:
     df = pd.read_excel(io.BytesIO(file_bytes))
-    validate_columns(df, REQUIRED_ISSUE_COLUMNS, "phiáº¿u xuáº¥t kho")
+    validate_columns(df, REQUIRED_ISSUE_COLUMNS, "phiếu xuất kho")
 
     actual_col = detect_column_by_name_or_position(
         df,
-        ["Actual Quantity", "Thá»±c xuáº¥t"],
+        ["Actual Quantity", "Thực xuất"],
         28,  # AB
-        "Actual Quantity / Thá»±c xuáº¥t",
+        "Actual Quantity / Thực xuất",
     )
     status_col = detect_column_by_name_or_position(
         df,
@@ -365,10 +365,10 @@ def build_sequential_5_layer(issue_df: pd.DataFrame, mb52_raw: pd.DataFrame) -> 
     remain_cn = map_cn.copy()
     remain_tinh = map_tinh.copy()
 
-    r["Táº§ng Ä‘Ã¡p á»©ng"] = ""
-    r["Gá»£i Ã½ chuyá»ƒn WBS"] = ""
+    r["Tầng đáp ứng"] = ""
+    r["Gợi ý chuyển WBS"] = ""
     r["Report Status"] = ""
-    r["Thiáº¿u kho"] = False
+    r["Thiếu kho"] = False
 
     for col in STOCK_COLUMNS:
         r[col] = 0.0
@@ -386,35 +386,35 @@ def build_sequential_5_layer(issue_df: pd.DataFrame, mb52_raw: pd.DataFrame) -> 
         tinh_key = (mat, plant)
         kv_key = mat
 
-        r.at[idx, "Tá»“n kho DA CN"] = remain_da_cn.get(da_cn_key, 0)
-        r.at[idx, "Tá»“n kho DA Tá»‰nh"] = remain_da_tinh.get(da_tinh_key, 0)
-        r.at[idx, "Tá»“n kho CN"] = remain_cn.get(cn_key, 0)
-        r.at[idx, "Tá»“n kho Tá»‰nh"] = remain_tinh.get(tinh_key, 0)
-        r.at[idx, "Tá»“n kho Khu vá»±c"] = map_kv.get(kv_key, 0)
+        r.at[idx, "Tồn kho DA CN"] = remain_da_cn.get(da_cn_key, 0)
+        r.at[idx, "Tồn kho DA Tỉnh"] = remain_da_tinh.get(da_tinh_key, 0)
+        r.at[idx, "Tồn kho CN"] = remain_cn.get(cn_key, 0)
+        r.at[idx, "Tồn kho Tỉnh"] = remain_tinh.get(tinh_key, 0)
+        r.at[idx, "Tồn kho Khu vực"] = map_kv.get(kv_key, 0)
 
         da_cn_qty = remain_da_cn.get(da_cn_key, 0)
         if qty <= da_cn_qty:
             remain_da_cn[da_cn_key] = da_cn_qty - qty
-            r.at[idx, "Táº§ng Ä‘Ã¡p á»©ng"] = "Kho DA CN"
-            r.at[idx, "Report Status"] = "Äáº¢M Báº¢O"
+            r.at[idx, "Tầng đáp ứng"] = "Kho DA CN"
+            r.at[idx, "Report Status"] = "ĐẢM BẢO"
             continue
 
-        r.at[idx, "Report Status"] = "KHÃ”NG Äáº¢M Báº¢O"
-        r.at[idx, "Thiáº¿u kho"] = True
+        r.at[idx, "Report Status"] = "KHÔNG ĐẢM BẢO"
+        r.at[idx, "Thiếu kho"] = True
 
         if qty <= remain_da_tinh.get(da_tinh_key, 0):
             remain_da_tinh[da_tinh_key] -= qty
-            r.at[idx, "Gá»£i Ã½ chuyá»ƒn WBS"] = "CÃ³ thá»ƒ chuyá»ƒn tá»« Kho DA Tá»‰nh"
+            r.at[idx, "Gợi ý chuyển WBS"] = "Có thể chuyển từ Kho DA Tỉnh"
         elif qty <= remain_cn.get(cn_key, 0):
             remain_cn[cn_key] -= qty
-            r.at[idx, "Gá»£i Ã½ chuyá»ƒn WBS"] = "CÃ³ thá»ƒ chuyá»ƒn tá»« Kho CN"
+            r.at[idx, "Gợi ý chuyển WBS"] = "Có thể chuyển từ Kho CN"
         elif qty <= remain_tinh.get(tinh_key, 0):
             remain_tinh[tinh_key] -= qty
-            r.at[idx, "Gá»£i Ã½ chuyá»ƒn WBS"] = "CÃ³ thá»ƒ chuyá»ƒn tá»« Kho Tá»‰nh"
+            r.at[idx, "Gợi ý chuyển WBS"] = "Có thể chuyển từ Kho Tỉnh"
         elif qty <= map_kv.get(kv_key, 0):
-            r.at[idx, "Gá»£i Ã½ chuyá»ƒn WBS"] = "CÃ³ thá»ƒ Ä‘iá»u chuyá»ƒn tá»« Kho Khu vá»±c"
+            r.at[idx, "Gợi ý chuyển WBS"] = "Có thể điều chuyển từ Kho Khu vực"
         else:
-            r.at[idx, "Gá»£i Ã½ chuyá»ƒn WBS"] = "Thiáº¿u toÃ n bá»™ cÃ¡c táº§ng kho"
+            r.at[idx, "Gợi ý chuyển WBS"] = "Thiếu toàn bộ các tầng kho"
 
     return r
 
@@ -424,50 +424,50 @@ def build_business_conclusion(report_df: pd.DataFrame) -> pd.DataFrame:
 
     exported = r["Status"].apply(is_exported_status)
     enough_actual = r["Actual Quantity"] >= r["Transfer Quantity"]
-    enough_mb52 = ~r["Thiáº¿u kho"]
+    enough_mb52 = ~r["Thiếu kho"]
 
     shortage_by_actual = (r["Transfer Quantity"] - r["Actual Quantity"]).clip(lower=0)
     shortage_by_mb52 = r["Transfer Quantity"].where(~enough_mb52, 0)
-    r["CÃ²n thiáº¿u"] = shortage_by_actual.where(shortage_by_actual > 0, shortage_by_mb52).fillna(0)
+    r["Còn thiếu"] = shortage_by_actual.where(shortage_by_actual > 0, shortage_by_mb52).fillna(0)
 
-    r["TÃ¬nh tráº¡ng"] = "Äáº£m báº£o xuáº¥t kho"
-    r["Gá»£i Ã½ xá»­ lÃ½"] = "KhÃ´ng cáº§n xá»­ lÃ½ thÃªm"
+    r["Tình trạng"] = "Đảm bảo xuất kho"
+    r["Gợi ý xử lý"] = "Không cần xử lý thêm"
 
     not_exported_mask = ~exported
     short_actual_mask = exported & ~enough_actual
     mb52_missing_mask = exported & enough_actual & ~enough_mb52
 
-    r.loc[not_exported_mask, "TÃ¬nh tráº¡ng"] = "ChÆ°a xuáº¥t kho"
-    r.loc[not_exported_mask, "Gá»£i Ã½ xá»­ lÃ½"] = "Kiá»ƒm tra tráº¡ng thÃ¡i phiáº¿u, thá»±c hiá»‡n xuáº¥t kho Ä‘á»ƒ Status = 12"
+    r.loc[not_exported_mask, "Tình trạng"] = "Chưa xuất kho"
+    r.loc[not_exported_mask, "Gợi ý xử lý"] = "Kiểm tra trạng thái phiếu, thực hiện xuất kho để Status = 12"
 
-    r.loc[short_actual_mask, "TÃ¬nh tráº¡ng"] = "Xuáº¥t thiáº¿u"
-    r.loc[short_actual_mask, "Gá»£i Ã½ xá»­ lÃ½"] = "Kiá»ƒm tra sá»‘ lÆ°á»£ng thá»±c xuáº¥t vÃ  xuáº¥t bá»• sung pháº§n cÃ²n thiáº¿u"
+    r.loc[short_actual_mask, "Tình trạng"] = "Xuất thiếu"
+    r.loc[short_actual_mask, "Gợi ý xử lý"] = "Kiểm tra số lượng thực xuất và xuất bổ sung phần còn thiếu"
 
-    r.loc[mb52_missing_mask, "TÃ¬nh tráº¡ng"] = "Thiáº¿u tá»“n kho MB52"
-    r.loc[mb52_missing_mask, "Gá»£i Ã½ xá»­ lÃ½"] = r.loc[mb52_missing_mask, "Gá»£i Ã½ chuyá»ƒn WBS"].fillna("")
-    r.loc[mb52_missing_mask & (r["Gá»£i Ã½ xá»­ lÃ½"] == ""), "Gá»£i Ã½ xá»­ lÃ½"] = "Kiá»ƒm tra bá»• sung tá»“n kho MB52 hoáº·c Ä‘iá»u chuyá»ƒn váº­t tÆ°"
+    r.loc[mb52_missing_mask, "Tình trạng"] = "Thiếu tồn kho MB52"
+    r.loc[mb52_missing_mask, "Gợi ý xử lý"] = r.loc[mb52_missing_mask, "Gợi ý chuyển WBS"].fillna("")
+    r.loc[mb52_missing_mask & (r["Gợi ý xử lý"] == ""), "Gợi ý xử lý"] = "Kiểm tra bổ sung tồn kho MB52 hoặc điều chuyển vật tư"
 
-    r["Äáº£m báº£o 100%"] = exported & enough_actual & enough_mb52
+    r["Đảm bảo 100%"] = exported & enough_actual & enough_mb52
     return r
 
 
 def build_conclusion_sheet(total: int, ok: int, not_ok: int, mb52_meta: Dict[str, str]) -> pd.DataFrame:
     ok_rate = (ok / total * 100) if total else 0
     conclusion = (
-        "Äáº¢M Báº¢O XUáº¤T KHO 100%"
+        "ĐẢM BẢO XUẤT KHO 100%"
         if total > 0 and not_ok == 0
-        else "CHÆ¯A Äáº¢M Báº¢O XUáº¤T KHO 100%"
+        else "CHƯA ĐẢM BẢO XUẤT KHO 100%"
     )
     return pd.DataFrame(
         [
-            {"ThÃ´ng tin": "Káº¿t luáº­n", "GiÃ¡ trá»‹": conclusion},
-            {"ThÃ´ng tin": "Tá»•ng dÃ²ng", "GiÃ¡ trá»‹": total},
-            {"ThÃ´ng tin": "ÄÃ£ xuáº¥t Ä‘á»§", "GiÃ¡ trá»‹": ok},
-            {"ThÃ´ng tin": "ChÆ°a Ä‘áº£m báº£o", "GiÃ¡ trá»‹": not_ok},
-            {"ThÃ´ng tin": "Tá»· lá»‡ Ä‘áº£m báº£o", "GiÃ¡ trá»‹": f"{ok_rate:.1f}%"},
-            {"ThÃ´ng tin": "Nguá»“n MB52", "GiÃ¡ trá»‹": mb52_meta.get("source", "")},
-            {"ThÃ´ng tin": "MB52 URL/Path", "GiÃ¡ trá»‹": mb52_meta.get("url", "")},
-            {"ThÃ´ng tin": "Thá»i Ä‘iá»ƒm kiá»ƒm tra", "GiÃ¡ trá»‹": datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")},
+            {"Thông tin": "Kết luận", "Giá trị": conclusion},
+            {"Thông tin": "Tổng dòng", "Giá trị": total},
+            {"Thông tin": "Đã xuất đủ", "Giá trị": ok},
+            {"Thông tin": "Chưa đảm bảo", "Giá trị": not_ok},
+            {"Thông tin": "Tỷ lệ đảm bảo", "Giá trị": f"{ok_rate:.1f}%"},
+            {"Thông tin": "Nguồn MB52", "Giá trị": mb52_meta.get("source", "")},
+            {"Thông tin": "MB52 URL/Path", "Giá trị": mb52_meta.get("url", "")},
+            {"Thông tin": "Thời điểm kiểm tra", "Giá trị": datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")},
         ]
     )
 
@@ -505,9 +505,9 @@ def format_workbook(writer, sheet_names: list[str]) -> None:
 
 def export_excel(full_df: pd.DataFrame, issue_df: pd.DataFrame, mb52_meta: Dict[str, str]) -> bytes:
     total = len(full_df)
-    ok = int(full_df["Äáº£m báº£o 100%"].sum())
+    ok = int(full_df["Đảm bảo 100%"].sum())
     not_ok = total - ok
-    error_df = full_df.loc[~full_df["Äáº£m báº£o 100%"], DETAIL_COLUMNS].copy()
+    error_df = full_df.loc[~full_df["Đảm bảo 100%"], DETAIL_COLUMNS].copy()
     output = io.BytesIO()
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -523,9 +523,9 @@ def export_excel(full_df: pd.DataFrame, issue_df: pd.DataFrame, mb52_meta: Dict[
                     "Material Description",
                     "Plant",
                     "Functional Location",
-                    "CÃ²n thiáº¿u",
-                    "TÃ¬nh tráº¡ng",
-                    "Gá»£i Ã½ xá»­ lÃ½",
+                    "Còn thiếu",
+                    "Tình trạng",
+                    "Gợi ý xử lý",
                 ]
             ].to_excel(writer, index=False, sheet_name="GoiYXuLy")
             sheet_names.extend(["ChiTietChuaDamBao", "GoiYXuLy"])
@@ -540,8 +540,8 @@ def render_result_card(is_all_ok: bool) -> None:
         st.markdown(
             """
             <div class="result-card result-ok">
-                <div class="result-headline">âœ… Äáº¢M Báº¢O XUáº¤T KHO 100%</div>
-                <div class="result-copy">Loáº¡i phiáº¿u nÃ y Ä‘Ã£ xuáº¥t Ä‘á»§ toÃ n bá»™ váº­t tÆ°. KhÃ´ng cáº§n xá»­ lÃ½ thÃªm.</div>
+                <div class="result-headline">✅ ĐẢM BẢO XUẤT KHO 100%</div>
+                <div class="result-copy">Loại phiếu này đã xuất đủ toàn bộ vật tư. Không cần xử lý thêm.</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -550,8 +550,8 @@ def render_result_card(is_all_ok: bool) -> None:
         st.markdown(
             """
             <div class="result-card result-bad">
-                <div class="result-headline">âš ï¸ CHÆ¯A Äáº¢M Báº¢O XUáº¤T KHO 100%</div>
-                <div class="result-copy">Chá»‰ cÃ¡c dÃ²ng lá»—i hoáº·c chÆ°a Ä‘á»§ Ä‘Æ°á»£c hiá»ƒn thá»‹ bÃªn dÆ°á»›i.</div>
+                <div class="result-headline">⚠️ CHƯA ĐẢM BẢO XUẤT KHO 100%</div>
+                <div class="result-copy">Chỉ các dòng lỗi hoặc chưa đủ được hiển thị bên dưới.</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -564,47 +564,47 @@ def render_result_card(is_all_ok: bool) -> None:
 st.markdown(
     f"""
     <div class="app-header">
-        <div class="app-title">ðŸ“¦ {APP_NAME}</div>
-        <div class="app-subtitle">{APP_SUBTITLE} Â· Version {APP_VERSION}</div>
+        <div class="app-title">📦 {APP_NAME}</div>
+        <div class="app-subtitle">{APP_SUBTITLE} · Version {APP_VERSION}</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-st.markdown('<div class="step-title">BÆ°á»›c 1: Chá»n nguá»“n MB52</div>', unsafe_allow_html=True)
+st.markdown('<div class="step-title">Bước 1: Chọn nguồn MB52</div>', unsafe_allow_html=True)
 source_options = [
-    "GitHub - MB52 má»›i nháº¥t",
+    "GitHub - MB52 mới nhất",
     "Local - data/MB52.XLSX",
-    "Upload MB52 táº¡m thá»i",
+    "Upload MB52 tạm thời",
 ]
-mb52_source = st.radio("Nguá»“n dá»¯ liá»‡u MB52", source_options, horizontal=True, label_visibility="collapsed")
+mb52_source = st.radio("Nguồn dữ liệu MB52", source_options, horizontal=True, label_visibility="collapsed")
 
 mb52_bytes: Optional[bytes] = None
 mb52_meta: Dict[str, str] = {}
 
 col_source, col_refresh = st.columns([4, 1])
 with col_source:
-    if mb52_source == "GitHub - MB52 má»›i nháº¥t":
+    if mb52_source == "GitHub - MB52 mới nhất":
         raw_url = st.text_input("GitHub Raw URL MB52", value=get_mb52_raw_url())
         try:
             mb52_bytes, mb52_meta = download_mb52_from_github(raw_url)
         except Exception as exc:
-            st.error(f"âŒ KhÃ´ng táº£i Ä‘Æ°á»£c MB52 tá»« GitHub: {exc}")
+            st.error(f"❌ Không tải được MB52 từ GitHub: {exc}")
             st.stop()
     elif mb52_source == "Local - data/MB52.XLSX":
         try:
             mb52_bytes, mb52_meta = read_local_mb52(LOCAL_MB52_PATH)
         except Exception as exc:
-            st.error(f"âŒ KhÃ´ng Ä‘á»c Ä‘Æ°á»£c file local {LOCAL_MB52_PATH}: {exc}")
+            st.error(f"❌ Không đọc được file local {LOCAL_MB52_PATH}: {exc}")
             st.stop()
     else:
-        upload_mb52 = st.file_uploader("Upload MB52 táº¡m thá»i", type=["xlsx", "xls"], key="mb52_upload")
+        upload_mb52 = st.file_uploader("Upload MB52 tạm thời", type=["xlsx", "xls"], key="mb52_upload")
         if not upload_mb52:
-            st.info("Vui lÃ²ng upload file MB52 Ä‘á»ƒ tiáº¿p tá»¥c.")
+            st.info("Vui lòng upload file MB52 để tiếp tục.")
             st.stop()
         mb52_bytes = upload_mb52.getvalue()
         mb52_meta = {
-            "source": "Upload MB52 táº¡m thá»i",
+            "source": "Upload MB52 tạm thời",
             "url": upload_mb52.name,
             "loaded_at": datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
             "last_modified": "",
@@ -614,52 +614,52 @@ with col_source:
 with col_refresh:
     st.write("")
     st.write("")
-    if st.button("ðŸ”„ LÃ m má»›i MB52", use_container_width=True):
+    if st.button("🔄 Làm mới MB52", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
 mb52_raw = load_mb52(mb52_bytes)
 st.success(
-    f"ÄÃ£ sáºµn sÃ ng MB52: {len(mb52_raw):,} dÃ²ng Â· "
-    f"{mb52_raw['Material'].nunique():,} mÃ£ váº­t tÆ° Â· "
-    f"nguá»“n {mb52_meta.get('source', '')}"
+    f"Đã sẵn sàng MB52: {len(mb52_raw):,} dòng · "
+    f"{mb52_raw['Material'].nunique():,} mã vật tư · "
+    f"nguồn {mb52_meta.get('source', '')}"
 )
 
-st.markdown('<div class="step-title">BÆ°á»›c 2: Upload phiáº¿u xuáº¥t kho</div>', unsafe_allow_html=True)
+st.markdown('<div class="step-title">Bước 2: Upload phiếu xuất kho</div>', unsafe_allow_html=True)
 issue_file = st.file_uploader(
-    "Chá»n file phiáº¿u xuáº¥t kho",
+    "Chọn file phiếu xuất kho",
     type=["xlsx", "xls"],
-    help="File cáº§n cÃ³ Transfer Quantity, Actual Quantity á»Ÿ cá»™t AB hoáº·c theo tÃªn cá»™t, vÃ  Status á»Ÿ cá»™t AC hoáº·c theo tÃªn cá»™t.",
+    help="File cần có Transfer Quantity, Actual Quantity ở cột AB hoặc theo tên cột, và Status ở cột AC hoặc theo tên cột.",
 )
 if not issue_file:
-    st.info("Upload phiáº¿u xuáº¥t kho Ä‘á»ƒ pháº§n má»m káº¿t luáº­n ngay.")
+    st.info("Upload phiếu xuất kho để phần mềm kết luận ngay.")
     st.stop()
 
 issue_df = load_issue(issue_file.getvalue())
 
-with st.spinner("Äang kiá»ƒm tra tráº¡ng thÃ¡i thá»±c xuáº¥t vÃ  tá»“n kho MB52 theo 5 táº§ng..."):
+with st.spinner("Đang kiểm tra trạng thái thực xuất và tồn kho MB52 theo 5 tầng..."):
     stock_report = build_sequential_5_layer(issue_df, mb52_raw)
     final_report = build_business_conclusion(stock_report)
 
 total_lines = len(final_report)
-ok_lines = int(final_report["Äáº£m báº£o 100%"].sum())
+ok_lines = int(final_report["Đảm bảo 100%"].sum())
 not_ok_lines = total_lines - ok_lines
 ok_rate = (ok_lines / total_lines * 100) if total_lines else 0
 is_all_ok = total_lines > 0 and not_ok_lines == 0
 
-st.markdown('<div class="step-title">BÆ°á»›c 3: Xem káº¿t luáº­n</div>', unsafe_allow_html=True)
+st.markdown('<div class="step-title">Bước 3: Xem kết luận</div>', unsafe_allow_html=True)
 metric1, metric2, metric3, metric4 = st.columns(4)
-metric1.metric("Tá»•ng dÃ²ng", f"{total_lines:,}")
-metric2.metric("ÄÃ£ xuáº¥t Ä‘á»§", f"{ok_lines:,}")
-metric3.metric("ChÆ°a Ä‘áº£m báº£o", f"{not_ok_lines:,}")
-metric4.metric("Tá»· lá»‡ Ä‘áº£m báº£o", f"{ok_rate:.1f}%")
+metric1.metric("Tổng dòng", f"{total_lines:,}")
+metric2.metric("Đã xuất đủ", f"{ok_lines:,}")
+metric3.metric("Chưa đảm bảo", f"{not_ok_lines:,}")
+metric4.metric("Tỷ lệ đảm bảo", f"{ok_rate:.1f}%")
 
 render_result_card(is_all_ok)
 
-error_df = final_report.loc[~final_report["Äáº£m báº£o 100%"], DETAIL_COLUMNS].copy()
+error_df = final_report.loc[~final_report["Đảm bảo 100%"], DETAIL_COLUMNS].copy()
 
 if not is_all_ok:
-    error_counts = error_df["TÃ¬nh tráº¡ng"].value_counts().rename_axis("TÃ¬nh tráº¡ng").reset_index(name="Sá»‘ dÃ²ng")
+    error_counts = error_df["Tình trạng"].value_counts().rename_axis("Tình trạng").reset_index(name="Số dòng")
     st.dataframe(error_counts, use_container_width=True, hide_index=True, height=150)
 
     st.dataframe(
@@ -670,19 +670,19 @@ if not is_all_ok:
         column_config={
             "Transfer Quantity": st.column_config.NumberColumn("Transfer Quantity", format="%.2f"),
             "Actual Quantity": st.column_config.NumberColumn("Actual Quantity", format="%.2f"),
-            "CÃ²n thiáº¿u": st.column_config.NumberColumn("CÃ²n thiáº¿u", format="%.2f"),
-            "Gá»£i Ã½ xá»­ lÃ½": st.column_config.TextColumn("Gá»£i Ã½ xá»­ lÃ½", width="large"),
+            "Còn thiếu": st.column_config.NumberColumn("Còn thiếu", format="%.2f"),
+            "Gợi ý xử lý": st.column_config.TextColumn("Gợi ý xử lý", width="large"),
         },
     )
 
 export_bytes = export_excel(final_report, issue_df, mb52_meta)
 file_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 st.download_button(
-    label="â¬‡ï¸ Táº£i káº¿t quáº£ Excel",
+    label="⬇️ Tải kết quả Excel",
     data=export_bytes,
     file_name=f"StockFlow_KetQua_XuatKho_{file_time}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True,
 )
 
-st.caption("StockFlow Checker Â· NgÆ°á»i dÃ¹ng upload phiáº¿u, pháº§n má»m tráº£ lá»i ngay: Ä‘áº£m báº£o 100% hoáº·c thiáº¿u dÃ²ng nÃ o, vÃ¬ sao, xá»­ lÃ½ tháº¿ nÃ o.")
+st.caption("StockFlow Checker · Người dùng upload phiếu, phần mềm trả lời ngay: đảm bảo 100% hoặc thiếu dòng nào, vì sao, xử lý thế nào.")
