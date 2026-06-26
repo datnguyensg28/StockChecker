@@ -59,6 +59,7 @@ DETAIL_COLUMNS = [
     "Transfer Quantity",
     "Actual Quantity",
     "Status",
+    "Số lượng cần xử lý",
     "Còn thiếu",
     "Tình trạng",
     "Gợi ý xử lý",
@@ -380,16 +381,29 @@ def build_sequential_5_layer(issue_df: pd.DataFrame, mb52_raw: pd.DataFrame) -> 
     r["Gợi ý chuyển WBS"] = ""
     r["Report Status"] = ""
     r["Thiếu kho"] = False
+    r["Số lượng cần xử lý"] = (r["Transfer Quantity"] - r["Actual Quantity"]).clip(lower=0)
 
     for col in STOCK_COLUMNS:
         r[col] = 0.0
 
     for idx, row in r.iterrows():
-        qty = float(row["Transfer Quantity"])
+        qty = float(r.at[idx, "Số lượng cần xử lý"])
         mat = normalize_key_value(row["Material Number"])
         plant = normalize_key_value(row["Plant"])
         sloc = normalize_key_value(row["Sending Sloc"])
         wbs = normalize_key_value(row["Source WBS"])
+
+        if is_exported_status(row["Status"]):
+            r.at[idx, "Tầng đáp ứng"] = "Đã xuất kho"
+            r.at[idx, "Report Status"] = "ĐÃ XUẤT - KHÔNG TÍNH KHO"
+            r.at[idx, "Gợi ý chuyển WBS"] = "Status = 12, không cần tính chuyển kho"
+            continue
+
+        if qty <= 0:
+            r.at[idx, "Tầng đáp ứng"] = "Không còn thiếu"
+            r.at[idx, "Report Status"] = "KHÔNG CẦN TÍNH KHO"
+            r.at[idx, "Gợi ý chuyển WBS"] = "Số lượng còn thiếu bằng 0"
+            continue
 
         da_cn_key = (mat, plant, sloc, wbs)
         da_tinh_key = (mat, plant, wbs)
@@ -435,30 +449,41 @@ def build_business_conclusion(report_df: pd.DataFrame) -> pd.DataFrame:
 
     exported = r["Status"].apply(is_exported_status)
     enough_actual = r["Actual Quantity"] >= r["Transfer Quantity"]
-    enough_mb52 = ~r["Thiếu kho"]
+    enough_current_stock = r["Report Status"] == "ĐẢM BẢO"
+    transfer_suggestion_text = r["Gợi ý chuyển WBS"].fillna("")
+    has_transfer_suggestion = transfer_suggestion_text.str.startswith("Có thể")
 
-    shortage_by_actual = (r["Transfer Quantity"] - r["Actual Quantity"]).clip(lower=0)
-    shortage_by_mb52 = r["Transfer Quantity"].where(~enough_mb52, 0)
-    r["Còn thiếu"] = shortage_by_actual.where(shortage_by_actual > 0, shortage_by_mb52).fillna(0)
+    r["Còn thiếu"] = (r["Transfer Quantity"] - r["Actual Quantity"]).clip(lower=0).fillna(0)
 
-    r["Tình trạng"] = "Đảm bảo xuất kho"
+    r["Tình trạng"] = "Đã xuất đủ"
     r["Gợi ý xử lý"] = "Không cần xử lý thêm"
 
-    not_exported_mask = ~exported
-    short_actual_mask = exported & ~enough_actual
-    mb52_missing_mask = exported & enough_actual & ~enough_mb52
+    exported_short_mask = exported & ~enough_actual
+    not_exported_no_qty_mask = ~exported & enough_actual
+    not_exported_enough_stock_mask = ~exported & enough_current_stock
+    not_exported_need_transfer_mask = ~exported & ~enough_current_stock & has_transfer_suggestion
+    not_exported_missing_stock_mask = ~exported & ~enough_current_stock & ~has_transfer_suggestion
 
-    r.loc[not_exported_mask, "Tình trạng"] = "Chưa xuất kho"
-    r.loc[not_exported_mask, "Gợi ý xử lý"] = "Kiểm tra trạng thái phiếu, thực hiện xuất kho để Status = 12"
+    r.loc[exported_short_mask, "Tình trạng"] = "Đã xuất nhưng thiếu số lượng"
+    r.loc[exported_short_mask, "Gợi ý xử lý"] = "Status = 12 nên không tính chuyển kho; kiểm tra Actual Quantity và bổ sung phần còn thiếu"
 
-    r.loc[short_actual_mask, "Tình trạng"] = "Xuất thiếu"
-    r.loc[short_actual_mask, "Gợi ý xử lý"] = "Kiểm tra số lượng thực xuất và xuất bổ sung phần còn thiếu"
+    r.loc[not_exported_no_qty_mask, "Tình trạng"] = "Chưa xác nhận xuất kho"
+    r.loc[not_exported_no_qty_mask, "Gợi ý xử lý"] = "Actual Quantity đã đủ nhưng Status chưa bằng 12, cần kiểm tra/cập nhật trạng thái phiếu"
 
-    r.loc[mb52_missing_mask, "Tình trạng"] = "Thiếu tồn kho MB52"
-    r.loc[mb52_missing_mask, "Gợi ý xử lý"] = r.loc[mb52_missing_mask, "Gợi ý chuyển WBS"].fillna("")
-    r.loc[mb52_missing_mask & (r["Gợi ý xử lý"] == ""), "Gợi ý xử lý"] = "Kiểm tra bổ sung tồn kho MB52 hoặc điều chuyển vật tư"
+    not_exported_enough_stock_mask = not_exported_enough_stock_mask & ~not_exported_no_qty_mask
+    not_exported_need_transfer_mask = not_exported_need_transfer_mask & ~not_exported_no_qty_mask
+    not_exported_missing_stock_mask = not_exported_missing_stock_mask & ~not_exported_no_qty_mask
 
-    r["Đảm bảo 100%"] = exported & enough_actual & enough_mb52
+    r.loc[not_exported_enough_stock_mask, "Tình trạng"] = "Chưa xuất kho - đủ tồn kho hiện tại"
+    r.loc[not_exported_enough_stock_mask, "Gợi ý xử lý"] = "Tồn kho DA CN hiện tại đủ, thực hiện xuất kho để Status = 12"
+
+    r.loc[not_exported_need_transfer_mask, "Tình trạng"] = "Chưa xuất kho - cần chuyển kho/dự án"
+    r.loc[not_exported_need_transfer_mask, "Gợi ý xử lý"] = r.loc[not_exported_need_transfer_mask, "Gợi ý chuyển WBS"].fillna("")
+
+    r.loc[not_exported_missing_stock_mask, "Tình trạng"] = "Chưa xuất kho - thiếu tồn kho MB52"
+    r.loc[not_exported_missing_stock_mask, "Gợi ý xử lý"] = "Thiếu toàn bộ các tầng kho, cần bổ sung tồn kho hoặc điều chuyển ngoài phạm vi MB52 hiện tại"
+
+    r["Đảm bảo 100%"] = exported & enough_actual
     return r
 
 
@@ -549,6 +574,62 @@ def build_stock_summaries(report_df: pd.DataFrame):
     ].copy()
 
     return summary_fl, summary_material, summary_plant, suggestion
+
+
+def sorted_unique_values(df: pd.DataFrame, column: str) -> list[str]:
+    if column not in df.columns:
+        return []
+    values = df[column].dropna().astype(str)
+    values = values[values.str.strip() != ""]
+    return sorted(values.unique().tolist())
+
+
+def apply_result_filters(df: pd.DataFrame) -> pd.DataFrame:
+    filtered = df.copy()
+
+    st.markdown('<div class="step-title">Bộ lọc báo cáo chưa đảm bảo</div>', unsafe_allow_html=True)
+    with st.container():
+        f1, f2, f3 = st.columns([2, 1, 1])
+        keyword = f1.text_input(
+            "Tìm nhanh",
+            placeholder="Request, mã vật tư, mô tả, FL, WBS...",
+        )
+        status_filter = f2.multiselect("Tình trạng", sorted_unique_values(filtered, "Tình trạng"))
+        plant_filter = f3.multiselect("Plant", sorted_unique_values(filtered, "Plant"))
+
+        f4, f5, f6 = st.columns(3)
+        fl_filter = f4.multiselect("Functional Location", sorted_unique_values(filtered, "Functional Location"))
+        layer_filter = f5.multiselect("Tầng đáp ứng", sorted_unique_values(filtered, "Tầng đáp ứng"))
+        sloc_filter = f6.multiselect("Sending Sloc", sorted_unique_values(filtered, "Sending Sloc"))
+
+    if keyword:
+        keyword_norm = keyword.strip().lower()
+        search_cols = [
+            "Request Number",
+            "Material Number",
+            "Material Description",
+            "Functional Location",
+            "Source WBS",
+            "Sending Sloc",
+        ]
+        mask = pd.Series(False, index=filtered.index)
+        for col in search_cols:
+            if col in filtered.columns:
+                mask = mask | filtered[col].astype(str).str.lower().str.contains(keyword_norm, na=False)
+        filtered = filtered[mask]
+
+    if status_filter:
+        filtered = filtered[filtered["Tình trạng"].astype(str).isin(status_filter)]
+    if plant_filter:
+        filtered = filtered[filtered["Plant"].astype(str).isin(plant_filter)]
+    if fl_filter:
+        filtered = filtered[filtered["Functional Location"].astype(str).isin(fl_filter)]
+    if layer_filter:
+        filtered = filtered[filtered["Tầng đáp ứng"].astype(str).isin(layer_filter)]
+    if sloc_filter:
+        filtered = filtered[filtered["Sending Sloc"].astype(str).isin(sloc_filter)]
+
+    return filtered
 
 
 def auto_width_worksheet(ws) -> None:
@@ -750,29 +831,24 @@ metric4.metric("Tỷ lệ đảm bảo", f"{ok_rate:.1f}%")
 
 render_result_card(is_all_ok)
 
-error_df = final_report.loc[~final_report["Đảm bảo 100%"], DETAIL_COLUMNS].copy()
-stock_detail_df = final_report.loc[~final_report["Đảm bảo 100%"], STOCK_DETAIL_COLUMNS].copy()
-
 if not is_all_ok:
-    error_counts = error_df["Tình trạng"].value_counts().rename_axis("Tình trạng").reset_index(name="Số dòng")
-    st.dataframe(error_counts, use_container_width=True, hide_index=True, height=150)
+    not_ok_report = final_report.loc[~final_report["Đảm bảo 100%"]].copy()
+    filtered_not_ok_report = apply_result_filters(not_ok_report)
 
-    st.dataframe(
-        error_df,
-        use_container_width=True,
-        hide_index=True,
-        height=430,
-        column_config={
-            "Transfer Quantity": st.column_config.NumberColumn("Transfer Quantity", format="%.2f"),
-            "Actual Quantity": st.column_config.NumberColumn("Actual Quantity", format="%.2f"),
-            "Còn thiếu": st.column_config.NumberColumn("Còn thiếu", format="%.2f"),
-            "Gợi ý xử lý": st.column_config.TextColumn("Gợi ý xử lý", width="large"),
-        },
-    )
+    st.caption(f"Đang hiển thị {len(filtered_not_ok_report):,}/{len(not_ok_report):,} dòng chưa đảm bảo theo bộ lọc hiện tại.")
 
-    with st.expander("Phân tầng kho và gợi ý chuyển kho", expanded=True):
+    if filtered_not_ok_report.empty:
+        st.info("Không có dòng nào khớp bộ lọc hiện tại.")
+    else:
+        error_df = filtered_not_ok_report[DETAIL_COLUMNS].copy()
+        stock_detail_df = filtered_not_ok_report[STOCK_DETAIL_COLUMNS].copy()
+
+        error_counts = error_df["Tình trạng"].value_counts().rename_axis("Tình trạng").reset_index(name="Số dòng")
+        st.dataframe(error_counts, use_container_width=True, hide_index=True, height=150)
+
+        st.markdown('<div class="step-title">Các dòng cần xử lý</div>', unsafe_allow_html=True)
         st.dataframe(
-            stock_detail_df,
+            error_df,
             use_container_width=True,
             hide_index=True,
             height=430,
@@ -780,30 +856,45 @@ if not is_all_ok:
                 "Transfer Quantity": st.column_config.NumberColumn("Transfer Quantity", format="%.2f"),
                 "Actual Quantity": st.column_config.NumberColumn("Actual Quantity", format="%.2f"),
                 "Còn thiếu": st.column_config.NumberColumn("Còn thiếu", format="%.2f"),
-                "Tồn kho DA CN": st.column_config.NumberColumn("Tồn kho DA CN", format="%.2f"),
-                "Tồn kho DA Tỉnh": st.column_config.NumberColumn("Tồn kho DA Tỉnh", format="%.2f"),
-                "Tồn kho CN": st.column_config.NumberColumn("Tồn kho CN", format="%.2f"),
-                "Tồn kho Tỉnh": st.column_config.NumberColumn("Tồn kho Tỉnh", format="%.2f"),
-                "Tồn kho Khu vực": st.column_config.NumberColumn("Tồn kho Khu vực", format="%.2f"),
-                "Gợi ý chuyển WBS": st.column_config.TextColumn("Gợi ý chuyển WBS", width="large"),
+                "Gợi ý xử lý": st.column_config.TextColumn("Gợi ý xử lý", width="large"),
             },
         )
 
-        summary_fl, summary_material, summary_plant, stock_suggestion = build_stock_summaries(final_report)
-        tab_fl, tab_material, tab_plant, tab_suggestion = st.tabs([
-            "Theo FL",
-            "Theo vật tư",
-            "Theo Plant",
-            "Gợi ý chuyển kho",
-        ])
-        with tab_fl:
-            st.dataframe(summary_fl, use_container_width=True, hide_index=True, height=260)
-        with tab_material:
-            st.dataframe(summary_material, use_container_width=True, hide_index=True, height=260)
-        with tab_plant:
-            st.dataframe(summary_plant, use_container_width=True, hide_index=True, height=260)
-        with tab_suggestion:
-            st.dataframe(stock_suggestion, use_container_width=True, hide_index=True, height=260)
+        st.markdown('<div class="step-title">Báo cáo tính toán chuyển kho / chuyển dự án</div>', unsafe_allow_html=True)
+        with st.expander("Phân tầng kho và gợi ý chuyển kho", expanded=True):
+            st.dataframe(
+                stock_detail_df,
+                use_container_width=True,
+                hide_index=True,
+                height=430,
+                column_config={
+                    "Transfer Quantity": st.column_config.NumberColumn("Transfer Quantity", format="%.2f"),
+                    "Actual Quantity": st.column_config.NumberColumn("Actual Quantity", format="%.2f"),
+                    "Còn thiếu": st.column_config.NumberColumn("Còn thiếu", format="%.2f"),
+                    "Tồn kho DA CN": st.column_config.NumberColumn("Tồn kho DA CN", format="%.2f"),
+                    "Tồn kho DA Tỉnh": st.column_config.NumberColumn("Tồn kho DA Tỉnh", format="%.2f"),
+                    "Tồn kho CN": st.column_config.NumberColumn("Tồn kho CN", format="%.2f"),
+                    "Tồn kho Tỉnh": st.column_config.NumberColumn("Tồn kho Tỉnh", format="%.2f"),
+                    "Tồn kho Khu vực": st.column_config.NumberColumn("Tồn kho Khu vực", format="%.2f"),
+                    "Gợi ý chuyển WBS": st.column_config.TextColumn("Gợi ý chuyển WBS", width="large"),
+                },
+            )
+
+            summary_fl, summary_material, summary_plant, stock_suggestion = build_stock_summaries(filtered_not_ok_report)
+            tab_fl, tab_material, tab_plant, tab_suggestion = st.tabs([
+                "Theo FL",
+                "Theo vật tư",
+                "Theo Plant",
+                "Gợi ý chuyển kho",
+            ])
+            with tab_fl:
+                st.dataframe(summary_fl, use_container_width=True, hide_index=True, height=260)
+            with tab_material:
+                st.dataframe(summary_material, use_container_width=True, hide_index=True, height=260)
+            with tab_plant:
+                st.dataframe(summary_plant, use_container_width=True, hide_index=True, height=260)
+            with tab_suggestion:
+                st.dataframe(stock_suggestion, use_container_width=True, hide_index=True, height=260)
 
 export_bytes = export_excel(final_report, issue_df, mb52_meta)
 file_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
