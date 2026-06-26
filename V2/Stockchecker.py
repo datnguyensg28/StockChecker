@@ -28,10 +28,10 @@ st.set_page_config(
 # CONFIG
 # =====================================================
 # Cach 1 - Khuyen dung: dat trong Streamlit Secrets:
-# MB52_RAW_URL = "https://raw.githubusercontent.com/datnguyensg28/StockChecker/main/data/MB52_latest.xlsx"
+# MB52_RAW_URL = "https://raw.githubusercontent.com/datnguyensg28/StockChecker/main/data/MB52.xlsx"
 #
 # Cach 2 - Tam thoi: dien truc tiep URL ben duoi.
-DEFAULT_MB52_RAW_URL = "https://raw.githubusercontent.com/datnguyensg28/StockChecker/main/data/MB52_latest.xlsx"
+DEFAULT_MB52_RAW_URL = "https://raw.githubusercontent.com/datnguyensg28/StockChecker/main/data/MB52.xlsx"
 
 APP_NAME = "StockFlow Online"
 APP_SUBTITLE = "Kiểm tra khả năng xuất kho theo tồn kho MB52 mới nhất"
@@ -533,7 +533,7 @@ st.markdown(
     <div class="hero-card">
         <div class="hero-title">📦 {APP_NAME}</div>
         <div class="hero-subtitle">{APP_SUBTITLE}</div>
-        <div class="badge">Version {APP_VERSION} · MB52 từ GitHub · Không cần Firebase · Không cần Database</div>
+        <div class="badge">Version {APP_VERSION} · MB52 từ GitHub · </div>
     </div>
     """,
     unsafe_allow_html=True,
