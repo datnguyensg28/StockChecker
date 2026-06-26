@@ -72,6 +72,17 @@ STOCK_COLUMNS = [
     "Tồn kho Khu vực",
 ]
 
+STOCK_DETAIL_COLUMNS = DETAIL_COLUMNS + [
+    "Tầng đáp ứng",
+    "Tồn kho DA CN",
+    "Tồn kho DA Tỉnh",
+    "Tồn kho CN",
+    "Tồn kho Tỉnh",
+    "Tồn kho Khu vực",
+    "Gợi ý chuyển WBS",
+    "Report Status",
+]
+
 
 # =====================================================
 # CSS
@@ -472,6 +483,74 @@ def build_conclusion_sheet(total: int, ok: int, not_ok: int, mb52_meta: Dict[str
     )
 
 
+def build_stock_summaries(report_df: pd.DataFrame):
+    missing_stock_df = report_df[report_df["Thiếu kho"]].copy()
+
+    if missing_stock_df.empty:
+        empty_fl = pd.DataFrame(columns=["Functional Location", "Số dòng thiếu kho"])
+        empty_material = pd.DataFrame(columns=["Material Number", "Material Description", "Số dòng thiếu kho", "Tổng SL yêu cầu"])
+        empty_plant = pd.DataFrame(columns=["Plant", "Số dòng thiếu kho", "Tổng SL yêu cầu"])
+        empty_suggestion = pd.DataFrame(columns=[
+            "Request Number",
+            "Material Number",
+            "Material Description",
+            "Plant",
+            "Source WBS",
+            "Sending Sloc",
+            "Functional Location",
+            "Transfer Quantity",
+            "Gợi ý chuyển WBS",
+        ])
+        return empty_fl, empty_material, empty_plant, empty_suggestion
+
+    summary_fl = (
+        missing_stock_df.groupby("Functional Location")
+        .size()
+        .reset_index(name="Số dòng thiếu kho")
+        .sort_values("Số dòng thiếu kho", ascending=False)
+    )
+
+    summary_material = (
+        missing_stock_df.groupby(["Material Number", "Material Description"])
+        .agg(
+            **{
+                "Số dòng thiếu kho": ("Material Number", "size"),
+                "Tổng SL yêu cầu": ("Transfer Quantity", "sum"),
+            }
+        )
+        .reset_index()
+        .sort_values("Số dòng thiếu kho", ascending=False)
+    )
+
+    summary_plant = (
+        missing_stock_df.groupby("Plant")
+        .agg(
+            **{
+                "Số dòng thiếu kho": ("Plant", "size"),
+                "Tổng SL yêu cầu": ("Transfer Quantity", "sum"),
+            }
+        )
+        .reset_index()
+        .sort_values("Số dòng thiếu kho", ascending=False)
+    )
+
+    suggestion = missing_stock_df[
+        [
+            "Request Number",
+            "Material Number",
+            "Material Description",
+            "Plant",
+            "Source WBS",
+            "Sending Sloc",
+            "Functional Location",
+            "Transfer Quantity",
+            "Gợi ý chuyển WBS",
+        ]
+    ].copy()
+
+    return summary_fl, summary_material, summary_plant, suggestion
+
+
 def auto_width_worksheet(ws) -> None:
     for col_idx, column_cells in enumerate(ws.columns, 1):
         max_length = 0
@@ -508,6 +587,8 @@ def export_excel(full_df: pd.DataFrame, issue_df: pd.DataFrame, mb52_meta: Dict[
     ok = int(full_df["Đảm bảo 100%"].sum())
     not_ok = total - ok
     error_df = full_df.loc[~full_df["Đảm bảo 100%"], DETAIL_COLUMNS].copy()
+    stock_detail_df = full_df.loc[~full_df["Đảm bảo 100%"], STOCK_DETAIL_COLUMNS].copy()
+    summary_fl, summary_material, summary_plant, stock_suggestion = build_stock_summaries(full_df)
     output = io.BytesIO()
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -528,7 +609,20 @@ def export_excel(full_df: pd.DataFrame, issue_df: pd.DataFrame, mb52_meta: Dict[
                     "Gợi ý xử lý",
                 ]
             ].to_excel(writer, index=False, sheet_name="GoiYXuLy")
-            sheet_names.extend(["ChiTietChuaDamBao", "GoiYXuLy"])
+            stock_detail_df.to_excel(writer, index=False, sheet_name="PhanTangKho")
+            summary_fl.to_excel(writer, index=False, sheet_name="TongHopThieuKho_FL")
+            summary_material.to_excel(writer, index=False, sheet_name="TongHopThieuKho_VatTu")
+            summary_plant.to_excel(writer, index=False, sheet_name="TongHopThieuKho_Plant")
+            stock_suggestion.to_excel(writer, index=False, sheet_name="GoiYChuyenKho")
+            sheet_names.extend([
+                "ChiTietChuaDamBao",
+                "GoiYXuLy",
+                "PhanTangKho",
+                "TongHopThieuKho_FL",
+                "TongHopThieuKho_VatTu",
+                "TongHopThieuKho_Plant",
+                "GoiYChuyenKho",
+            ])
 
         format_workbook(writer, sheet_names)
 
@@ -657,6 +751,7 @@ metric4.metric("Tỷ lệ đảm bảo", f"{ok_rate:.1f}%")
 render_result_card(is_all_ok)
 
 error_df = final_report.loc[~final_report["Đảm bảo 100%"], DETAIL_COLUMNS].copy()
+stock_detail_df = final_report.loc[~final_report["Đảm bảo 100%"], STOCK_DETAIL_COLUMNS].copy()
 
 if not is_all_ok:
     error_counts = error_df["Tình trạng"].value_counts().rename_axis("Tình trạng").reset_index(name="Số dòng")
@@ -674,6 +769,41 @@ if not is_all_ok:
             "Gợi ý xử lý": st.column_config.TextColumn("Gợi ý xử lý", width="large"),
         },
     )
+
+    with st.expander("Phân tầng kho và gợi ý chuyển kho", expanded=True):
+        st.dataframe(
+            stock_detail_df,
+            use_container_width=True,
+            hide_index=True,
+            height=430,
+            column_config={
+                "Transfer Quantity": st.column_config.NumberColumn("Transfer Quantity", format="%.2f"),
+                "Actual Quantity": st.column_config.NumberColumn("Actual Quantity", format="%.2f"),
+                "Còn thiếu": st.column_config.NumberColumn("Còn thiếu", format="%.2f"),
+                "Tồn kho DA CN": st.column_config.NumberColumn("Tồn kho DA CN", format="%.2f"),
+                "Tồn kho DA Tỉnh": st.column_config.NumberColumn("Tồn kho DA Tỉnh", format="%.2f"),
+                "Tồn kho CN": st.column_config.NumberColumn("Tồn kho CN", format="%.2f"),
+                "Tồn kho Tỉnh": st.column_config.NumberColumn("Tồn kho Tỉnh", format="%.2f"),
+                "Tồn kho Khu vực": st.column_config.NumberColumn("Tồn kho Khu vực", format="%.2f"),
+                "Gợi ý chuyển WBS": st.column_config.TextColumn("Gợi ý chuyển WBS", width="large"),
+            },
+        )
+
+        summary_fl, summary_material, summary_plant, stock_suggestion = build_stock_summaries(final_report)
+        tab_fl, tab_material, tab_plant, tab_suggestion = st.tabs([
+            "Theo FL",
+            "Theo vật tư",
+            "Theo Plant",
+            "Gợi ý chuyển kho",
+        ])
+        with tab_fl:
+            st.dataframe(summary_fl, use_container_width=True, hide_index=True, height=260)
+        with tab_material:
+            st.dataframe(summary_material, use_container_width=True, hide_index=True, height=260)
+        with tab_plant:
+            st.dataframe(summary_plant, use_container_width=True, hide_index=True, height=260)
+        with tab_suggestion:
+            st.dataframe(stock_suggestion, use_container_width=True, hide_index=True, height=260)
 
 export_bytes = export_excel(final_report, issue_df, mb52_meta)
 file_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
