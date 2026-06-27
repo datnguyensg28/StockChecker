@@ -59,6 +59,9 @@ DETAIL_COLUMNS = [
     "Transfer Quantity",
     "Actual Quantity",
     "Status",
+    "Kh\u00f3a ki\u1ec3m tra MB52",
+    "S\u1ed1 d\u00f2ng MB52 kh\u1edbp",
+    "T\u1ed3n kho \u0111\u00fang kh\u00f3a MB52",
     "Số lượng cần xử lý",
     "Còn thiếu",
     "Tình trạng",
@@ -177,10 +180,37 @@ def get_mb52_raw_url() -> str:
         return DEFAULT_MB52_RAW_URL
 
 
-def normalize_key_value(value: Any) -> str:
+def normalize_key_value(value: Any, strip_leading_zeros: bool = False) -> str:
     if pd.isna(value):
         return ""
-    return str(value).strip()
+
+    if isinstance(value, int):
+        text = str(value)
+    elif isinstance(value, float):
+        text = str(int(value)) if value.is_integer() else str(value).strip()
+    else:
+        text = str(value).replace("\u00a0", " ").strip()
+        if text.endswith(".0"):
+            numeric_part = text[:-2]
+            if numeric_part.replace("-", "", 1).isdigit():
+                text = numeric_part
+
+    text = " ".join(text.split()).upper()
+    if strip_leading_zeros and text.isdigit():
+        text = text.lstrip("0") or "0"
+    return text
+
+
+def normalize_material_key(value: Any) -> str:
+    return normalize_key_value(value, strip_leading_zeros=True)
+
+
+def normalize_sloc_key(value: Any) -> str:
+    return normalize_key_value(value, strip_leading_zeros=True)
+
+
+def normalize_wbs_key(value: Any) -> str:
+    return normalize_key_value(value, strip_leading_zeros=False)
 
 
 def normalize_column_name(value: Any) -> str:
@@ -236,11 +266,7 @@ def detect_column_by_name_or_position(
 
 
 def normalize_status(value: Any) -> str:
-    if pd.isna(value):
-        return ""
-    text = str(value).strip()
-    if text.endswith(".0"):
-        text = text[:-2]
+    text = normalize_key_value(value, strip_leading_zeros=True)
     return text
 
 
@@ -299,8 +325,10 @@ def load_mb52(file_bytes: bytes) -> pd.DataFrame:
     validate_columns(df, REQUIRED_MB52_COLUMNS + ["Storage Location"], "MB52")
 
     df["Unrestricted"] = pd.to_numeric(df["Unrestricted"], errors="coerce").fillna(0)
-    for col in ["Material", "Plant", "Storage Location", "WBS Element"]:
-        df[col] = df[col].apply(normalize_key_value)
+    df["Material"] = df["Material"].apply(normalize_material_key)
+    df["Plant"] = df["Plant"].apply(normalize_key_value)
+    df["Storage Location"] = df["Storage Location"].apply(normalize_sloc_key)
+    df["WBS Element"] = df["WBS Element"].apply(normalize_wbs_key)
 
     return df
 
@@ -332,159 +360,252 @@ def load_issue(file_bytes: bytes) -> pd.DataFrame:
     df["Actual Quantity"] = pd.to_numeric(df["Actual Quantity"], errors="coerce").fillna(0)
     df["Status"] = df["Status"].apply(normalize_status)
 
-    for col in ["Material Number", "Plant", "Source WBS", "Sending Sloc", "Functional Location"]:
-        df[col] = df[col].apply(normalize_key_value)
+    df["Material Number"] = df["Material Number"].apply(normalize_material_key)
+    df["Plant"] = df["Plant"].apply(normalize_key_value)
+    df["Source WBS"] = df["Source WBS"].apply(normalize_wbs_key)
+    df["Sending Sloc"] = df["Sending Sloc"].apply(normalize_sloc_key)
+    df["Functional Location"] = df["Functional Location"].apply(normalize_key_value)
 
     return df
 
 
-def build_inventory_maps(mb52_raw: pd.DataFrame):
-    map_da_cn = (
-        mb52_raw.groupby(["Material", "Plant", "Storage Location", "WBS Element"], as_index=False)["Unrestricted"]
-        .sum()
-        .set_index(["Material", "Plant", "Storage Location", "WBS Element"])["Unrestricted"]
-        .to_dict()
-    )
-    map_da_tinh = (
-        mb52_raw.groupby(["Material", "Plant", "WBS Element"], as_index=False)["Unrestricted"]
-        .sum()
-        .set_index(["Material", "Plant", "WBS Element"])["Unrestricted"]
-        .to_dict()
-    )
-    map_cn = (
-        mb52_raw.groupby(["Material", "Plant", "Storage Location"], as_index=False)["Unrestricted"]
-        .sum()
-        .set_index(["Material", "Plant", "Storage Location"])["Unrestricted"]
-        .to_dict()
-    )
-    map_tinh = (
-        mb52_raw.groupby(["Material", "Plant"], as_index=False)["Unrestricted"]
-        .sum()
-        .set_index(["Material", "Plant"])["Unrestricted"]
-        .to_dict()
-    )
-    map_kv = mb52_raw.groupby(["Material"], as_index=False)["Unrestricted"].sum().set_index(["Material"])["Unrestricted"].to_dict()
+COL_LAYER = "\u0054\u1ea7ng \u0111\u00e1p \u1ee9ng"
+COL_SUGGEST_TRANSFER = "G\u1ee3i \u00fd chuy\u1ec3n WBS"
+COL_MISSING_STOCK = "Thi\u1ebfu kho"
+COL_PROCESS_QTY = "S\u1ed1 l\u01b0\u1ee3ng c\u1ea7n x\u1eed l\u00fd"
+COL_SHORTAGE = "C\u00f2n thi\u1ebfu"
+COL_BUSINESS_STATUS = "T\u00ecnh tr\u1ea1ng"
+COL_ACTION = "G\u1ee3i \u00fd x\u1eed l\u00fd"
+COL_OK = "\u0110\u1ea3m b\u1ea3o 100%"
+COL_CHECK_KEY = "Kh\u00f3a ki\u1ec3m tra MB52"
+COL_MATCHED_ROWS = "S\u1ed1 d\u00f2ng MB52 kh\u1edbp"
+COL_DIRECT_STOCK = "T\u1ed3n kho \u0111\u00fang kh\u00f3a MB52"
 
-    return map_da_cn, map_da_tinh, map_cn, map_tinh, map_kv
+STOCK_CHECK_STATUSES = {"1", "5", "9"}
+EXPORTED_STATUS = "12"
+
+
+def join_unique(values: pd.Series, limit: int = 8) -> str:
+    normalized = []
+    for value in values.dropna().astype(str):
+        text = value.strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    if len(normalized) > limit:
+        return ", ".join(normalized[:limit]) + f", +{len(normalized) - limit}"
+    return ", ".join(normalized)
+
+
+def stock_sum_by_mask(mb52_raw: pd.DataFrame, mask: pd.Series) -> float:
+    return float(mb52_raw.loc[mask, "Unrestricted"].sum())
+
+
+def source_summary(source_rows: pd.DataFrame, limit: int = 3) -> str:
+    if source_rows.empty:
+        return ""
+    grouped = (
+        source_rows.groupby(["Plant", "Storage Location", "WBS Element"], as_index=False)["Unrestricted"]
+        .sum()
+        .sort_values("Unrestricted", ascending=False)
+    )
+    parts = []
+    for _, source in grouped.head(limit).iterrows():
+        parts.append(
+            f"Plant {source['Plant']} / Sloc {source['Storage Location']} / WBS {source['WBS Element']} "
+            f"({float(source['Unrestricted']):,.2f})"
+        )
+    return "; ".join(parts)
+
+
+def calculate_stock_layers(mb52_raw: pd.DataFrame, mat: str, plant: str, sloc: str, wbs: str, qty: float) -> Dict[str, Any]:
+    mat_mask = mb52_raw["Material"] == mat
+    plant_mask = mb52_raw["Plant"] == plant
+    sloc_mask = mb52_raw["Storage Location"] == sloc
+    wbs_mask = mb52_raw["WBS Element"] == wbs
+
+    da_cn_mask = mat_mask & plant_mask & sloc_mask & wbs_mask
+    da_tinh_mask = mat_mask & plant_mask & wbs_mask
+    cn_mask = mat_mask & plant_mask & sloc_mask
+    tinh_mask = mat_mask & plant_mask
+    kv_mask = mat_mask
+
+    da_cn_qty = stock_sum_by_mask(mb52_raw, da_cn_mask)
+    da_tinh_qty = stock_sum_by_mask(mb52_raw, da_tinh_mask)
+    cn_qty = stock_sum_by_mask(mb52_raw, cn_mask)
+    tinh_qty = stock_sum_by_mask(mb52_raw, tinh_mask)
+    kv_qty = stock_sum_by_mask(mb52_raw, kv_mask)
+
+    result = {
+        "T\u1ed3n kho DA CN": da_cn_qty,
+        "T\u1ed3n kho DA T\u1ec9nh": da_tinh_qty,
+        "T\u1ed3n kho CN": cn_qty,
+        "T\u1ed3n kho T\u1ec9nh": tinh_qty,
+        "T\u1ed3n kho Khu v\u1ef1c": kv_qty,
+        COL_MATCHED_ROWS: int(da_cn_mask.sum()),
+        COL_DIRECT_STOCK: da_cn_qty,
+        COL_LAYER: "Kh\u00f4ng \u0111\u1ee7 5 t\u1ea7ng",
+        COL_SUGGEST_TRANSFER: "Thi\u1ebfu to\u00e0n b\u1ed9 c\u00e1c t\u1ea7ng kho",
+    }
+
+    if qty <= da_cn_qty:
+        result[COL_LAYER] = "Kho DA CN"
+        result[COL_SUGGEST_TRANSFER] = "\u0110\u1ee7 t\u1ed3n kho \u0111\u00fang kho chi nh\u00e1nh v\u00e0 \u0111\u00fang WBS"
+    elif qty <= da_tinh_qty:
+        sources = source_summary(mb52_raw.loc[da_tinh_mask & ~sloc_mask & (mb52_raw["Unrestricted"] > 0)])
+        if not sources:
+            sources = source_summary(mb52_raw.loc[da_tinh_mask & (mb52_raw["Unrestricted"] > 0)])
+        result[COL_LAYER] = "Kho DA T\u1ec9nh"
+        result[COL_SUGGEST_TRANSFER] = f"C\u00f3 th\u1ec3 chuy\u1ec3n kho chi nh\u00e1nh trong c\u00f9ng WBS t\u1eeb {sources}"
+    elif qty <= cn_qty:
+        sources = source_summary(mb52_raw.loc[cn_mask & ~wbs_mask & (mb52_raw["Unrestricted"] > 0)])
+        if not sources:
+            sources = source_summary(mb52_raw.loc[cn_mask & (mb52_raw["Unrestricted"] > 0)])
+        result[COL_LAYER] = "Kho CN"
+        result[COL_SUGGEST_TRANSFER] = f"C\u00f3 th\u1ec3 chuy\u1ec3n d\u1ef1 \u00e1n/WBS t\u1ea1i c\u00f9ng kho chi nh\u00e1nh t\u1eeb {sources}"
+    elif qty <= tinh_qty:
+        sources = source_summary(mb52_raw.loc[tinh_mask & ~(sloc_mask & wbs_mask) & (mb52_raw["Unrestricted"] > 0)])
+        if not sources:
+            sources = source_summary(mb52_raw.loc[tinh_mask & (mb52_raw["Unrestricted"] > 0)])
+        result[COL_LAYER] = "Kho T\u1ec9nh"
+        result[COL_SUGGEST_TRANSFER] = f"C\u00f3 th\u1ec3 chuy\u1ec3n kho/chuy\u1ec3n d\u1ef1 \u00e1n trong c\u00f9ng Plant t\u1eeb {sources}"
+    elif qty <= kv_qty:
+        sources = source_summary(mb52_raw.loc[kv_mask & ~plant_mask & (mb52_raw["Unrestricted"] > 0)])
+        if not sources:
+            sources = source_summary(mb52_raw.loc[kv_mask & (mb52_raw["Unrestricted"] > 0)])
+        result[COL_LAYER] = "Kho Khu v\u1ef1c"
+        result[COL_SUGGEST_TRANSFER] = f"C\u00f3 th\u1ec3 \u0111i\u1ec1u chuy\u1ec3n li\u00ean Plant/khu v\u1ef1c t\u1eeb {sources}"
+
+    return result
+
+
+def build_pending_stock_report(issue_df: pd.DataFrame, mb52_raw: pd.DataFrame) -> pd.DataFrame:
+    pending = issue_df[issue_df["Status"].isin(STOCK_CHECK_STATUSES)].copy()
+    if pending.empty:
+        return pd.DataFrame()
+
+    group_cols = ["Material Number", "Plant", "Sending Sloc", "Source WBS"]
+    grouped = (
+        pending.groupby(group_cols, as_index=False)
+        .agg(
+            **{
+                "Request Number": ("Request Number", join_unique),
+                "Material Description": ("Material Description", "first"),
+                "Functional Location": ("Functional Location", join_unique),
+                "Transfer Quantity": ("Transfer Quantity", "sum"),
+                "Actual Quantity": ("Actual Quantity", "sum"),
+                "Status": ("Status", join_unique),
+            }
+        )
+    )
+
+    records = []
+    for _, row in grouped.iterrows():
+        mat = normalize_material_key(row["Material Number"])
+        plant = normalize_key_value(row["Plant"])
+        sloc = normalize_sloc_key(row["Sending Sloc"])
+        wbs = normalize_wbs_key(row["Source WBS"])
+        qty = float(row["Transfer Quantity"])
+
+        layers = calculate_stock_layers(mb52_raw, mat, plant, sloc, wbs, qty)
+        direct_stock = float(layers["T\u1ed3n kho DA CN"])
+        is_ok = qty <= direct_stock
+        shortage = max(qty - direct_stock, 0)
+
+        record = {
+            "Request Number": row["Request Number"],
+            "Material Number": mat,
+            "Material Description": row["Material Description"],
+            "Plant": plant,
+            "Source WBS": wbs,
+            "Sending Sloc": sloc,
+            "Functional Location": row["Functional Location"],
+            "Transfer Quantity": qty,
+            "Actual Quantity": float(row["Actual Quantity"]),
+            "Status": row["Status"],
+            COL_CHECK_KEY: f"Material={mat} | Plant={plant} | Sloc={sloc} | WBS={wbs}",
+            COL_MATCHED_ROWS: layers[COL_MATCHED_ROWS],
+            COL_DIRECT_STOCK: direct_stock,
+            COL_PROCESS_QTY: qty,
+            COL_SHORTAGE: shortage,
+            COL_BUSINESS_STATUS: "Status 1/5/9 - \u0111\u1ee7 t\u1ed3n kho" if is_ok else "Status 1/5/9 - kh\u00f4ng \u0111\u1ee7 t\u1ed3n kho",
+            COL_ACTION: "\u0110\u1ee7 t\u1ed3n kho MB52 \u0111\u00fang Material/Plant/Sloc/WBS" if is_ok else layers[COL_SUGGEST_TRANSFER],
+            COL_LAYER: "Kho DA CN" if is_ok else layers[COL_LAYER],
+            COL_SUGGEST_TRANSFER: layers[COL_SUGGEST_TRANSFER],
+            "Report Status": "\u0110\u1ea2M B\u1ea2O" if is_ok else "KH\u00d4NG \u0110\u1ea2M B\u1ea2O",
+            COL_MISSING_STOCK: not is_ok,
+            COL_OK: is_ok,
+        }
+        for stock_col in STOCK_COLUMNS:
+            record[stock_col] = layers[stock_col]
+        records.append(record)
+
+    return pd.DataFrame(records)
+
+
+def build_exported_status_report(issue_df: pd.DataFrame) -> pd.DataFrame:
+    exported = issue_df[issue_df["Status"] == EXPORTED_STATUS].copy()
+    if exported.empty:
+        return pd.DataFrame()
+
+    records = []
+    for _, row in exported.iterrows():
+        transfer_qty = float(row["Transfer Quantity"])
+        actual_qty = float(row["Actual Quantity"])
+        is_equal = abs(transfer_qty - actual_qty) < 1e-9
+        shortage = max(transfer_qty - actual_qty, 0)
+
+        if is_equal:
+            status_text = "Status 12 - \u0111\u00e3 xu\u1ea5t \u0111\u1ee7"
+            action = "Kh\u00f4ng c\u1ea7n x\u1eed l\u00fd th\u00eam"
+        elif actual_qty < transfer_qty:
+            status_text = "Status 12 - xu\u1ea5t thi\u1ebfu"
+            action = "Ki\u1ec3m tra Actual Quantity v\u00e0 xu\u1ea5t b\u1ed5 sung ph\u1ea7n c\u00f2n thi\u1ebfu"
+        else:
+            status_text = "Status 12 - xu\u1ea5t d\u01b0 so v\u1edbi y\u00eau c\u1ea7u"
+            action = "Ki\u1ec3m tra l\u1ea1i Actual Quantity v\u00e0 phi\u1ebfu xu\u1ea5t kho"
+
+        record = {
+            "Request Number": row["Request Number"],
+            "Material Number": normalize_material_key(row["Material Number"]),
+            "Material Description": row["Material Description"],
+            "Plant": normalize_key_value(row["Plant"]),
+            "Source WBS": normalize_wbs_key(row["Source WBS"]),
+            "Sending Sloc": normalize_sloc_key(row["Sending Sloc"]),
+            "Functional Location": normalize_key_value(row["Functional Location"]),
+            "Transfer Quantity": transfer_qty,
+            "Actual Quantity": actual_qty,
+            "Status": row["Status"],
+            COL_CHECK_KEY: "Status = 12, kh\u00f4ng ki\u1ec3m tra MB52",
+            COL_MATCHED_ROWS: 0,
+            COL_DIRECT_STOCK: 0.0,
+            COL_PROCESS_QTY: shortage,
+            COL_SHORTAGE: shortage,
+            COL_BUSINESS_STATUS: status_text,
+            COL_ACTION: action,
+            COL_LAYER: "\u0110\u00e3 xu\u1ea5t kho",
+            COL_SUGGEST_TRANSFER: "Status = 12, kh\u00f4ng t\u00ednh t\u1ed3n kho/chuy\u1ec3n kho",
+            "Report Status": "\u0110\u1ea2M B\u1ea2O" if is_equal else "KH\u00d4NG \u0110\u1ea2M B\u1ea2O",
+            COL_MISSING_STOCK: False,
+            COL_OK: is_equal,
+        }
+        for stock_col in STOCK_COLUMNS:
+            record[stock_col] = 0.0
+        records.append(record)
+
+    return pd.DataFrame(records)
 
 
 def build_sequential_5_layer(issue_df: pd.DataFrame, mb52_raw: pd.DataFrame) -> pd.DataFrame:
-    map_da_cn, map_da_tinh, map_cn, map_tinh, map_kv = build_inventory_maps(mb52_raw)
-
-    r = issue_df.copy()
-    remain_da_cn = map_da_cn.copy()
-    remain_da_tinh = map_da_tinh.copy()
-    remain_cn = map_cn.copy()
-    remain_tinh = map_tinh.copy()
-
-    r["Tầng đáp ứng"] = ""
-    r["Gợi ý chuyển WBS"] = ""
-    r["Report Status"] = ""
-    r["Thiếu kho"] = False
-    r["Số lượng cần xử lý"] = (r["Transfer Quantity"] - r["Actual Quantity"]).clip(lower=0)
-
-    for col in STOCK_COLUMNS:
-        r[col] = 0.0
-
-    for idx, row in r.iterrows():
-        qty = float(r.at[idx, "Số lượng cần xử lý"])
-        mat = normalize_key_value(row["Material Number"])
-        plant = normalize_key_value(row["Plant"])
-        sloc = normalize_key_value(row["Sending Sloc"])
-        wbs = normalize_key_value(row["Source WBS"])
-
-        if is_exported_status(row["Status"]):
-            r.at[idx, "Tầng đáp ứng"] = "Đã xuất kho"
-            r.at[idx, "Report Status"] = "ĐÃ XUẤT - KHÔNG TÍNH KHO"
-            r.at[idx, "Gợi ý chuyển WBS"] = "Status = 12, không cần tính chuyển kho"
-            continue
-
-        if qty <= 0:
-            r.at[idx, "Tầng đáp ứng"] = "Không còn thiếu"
-            r.at[idx, "Report Status"] = "KHÔNG CẦN TÍNH KHO"
-            r.at[idx, "Gợi ý chuyển WBS"] = "Số lượng còn thiếu bằng 0"
-            continue
-
-        da_cn_key = (mat, plant, sloc, wbs)
-        da_tinh_key = (mat, plant, wbs)
-        cn_key = (mat, plant, sloc)
-        tinh_key = (mat, plant)
-        kv_key = mat
-
-        r.at[idx, "Tồn kho DA CN"] = remain_da_cn.get(da_cn_key, 0)
-        r.at[idx, "Tồn kho DA Tỉnh"] = remain_da_tinh.get(da_tinh_key, 0)
-        r.at[idx, "Tồn kho CN"] = remain_cn.get(cn_key, 0)
-        r.at[idx, "Tồn kho Tỉnh"] = remain_tinh.get(tinh_key, 0)
-        r.at[idx, "Tồn kho Khu vực"] = map_kv.get(kv_key, 0)
-
-        da_cn_qty = remain_da_cn.get(da_cn_key, 0)
-        if qty <= da_cn_qty:
-            remain_da_cn[da_cn_key] = da_cn_qty - qty
-            r.at[idx, "Tầng đáp ứng"] = "Kho DA CN"
-            r.at[idx, "Report Status"] = "ĐẢM BẢO"
-            continue
-
-        r.at[idx, "Report Status"] = "KHÔNG ĐẢM BẢO"
-        r.at[idx, "Thiếu kho"] = True
-
-        if qty <= remain_da_tinh.get(da_tinh_key, 0):
-            remain_da_tinh[da_tinh_key] -= qty
-            r.at[idx, "Gợi ý chuyển WBS"] = "Có thể chuyển từ Kho DA Tỉnh"
-        elif qty <= remain_cn.get(cn_key, 0):
-            remain_cn[cn_key] -= qty
-            r.at[idx, "Gợi ý chuyển WBS"] = "Có thể chuyển từ Kho CN"
-        elif qty <= remain_tinh.get(tinh_key, 0):
-            remain_tinh[tinh_key] -= qty
-            r.at[idx, "Gợi ý chuyển WBS"] = "Có thể chuyển từ Kho Tỉnh"
-        elif qty <= map_kv.get(kv_key, 0):
-            r.at[idx, "Gợi ý chuyển WBS"] = "Có thể điều chuyển từ Kho Khu vực"
-        else:
-            r.at[idx, "Gợi ý chuyển WBS"] = "Thiếu toàn bộ các tầng kho"
-
-    return r
+    pending_report = build_pending_stock_report(issue_df, mb52_raw)
+    exported_report = build_exported_status_report(issue_df)
+    reports = [df for df in [pending_report, exported_report] if not df.empty]
+    if not reports:
+        return pd.DataFrame(columns=STOCK_DETAIL_COLUMNS + [COL_OK])
+    return pd.concat(reports, ignore_index=True, sort=False)
 
 
 def build_business_conclusion(report_df: pd.DataFrame) -> pd.DataFrame:
-    r = report_df.copy()
-
-    exported = r["Status"].apply(is_exported_status)
-    enough_actual = r["Actual Quantity"] >= r["Transfer Quantity"]
-    enough_current_stock = r["Report Status"] == "ĐẢM BẢO"
-    transfer_suggestion_text = r["Gợi ý chuyển WBS"].fillna("")
-    has_transfer_suggestion = transfer_suggestion_text.str.startswith("Có thể")
-
-    r["Còn thiếu"] = (r["Transfer Quantity"] - r["Actual Quantity"]).clip(lower=0).fillna(0)
-
-    r["Tình trạng"] = "Đã xuất đủ"
-    r["Gợi ý xử lý"] = "Không cần xử lý thêm"
-
-    exported_short_mask = exported & ~enough_actual
-    not_exported_no_qty_mask = ~exported & enough_actual
-    not_exported_enough_stock_mask = ~exported & enough_current_stock
-    not_exported_need_transfer_mask = ~exported & ~enough_current_stock & has_transfer_suggestion
-    not_exported_missing_stock_mask = ~exported & ~enough_current_stock & ~has_transfer_suggestion
-
-    r.loc[exported_short_mask, "Tình trạng"] = "Đã xuất nhưng thiếu số lượng"
-    r.loc[exported_short_mask, "Gợi ý xử lý"] = "Status = 12 nên không tính chuyển kho; kiểm tra Actual Quantity và bổ sung phần còn thiếu"
-
-    r.loc[not_exported_no_qty_mask, "Tình trạng"] = "Chưa xác nhận xuất kho"
-    r.loc[not_exported_no_qty_mask, "Gợi ý xử lý"] = "Actual Quantity đã đủ nhưng Status chưa bằng 12, cần kiểm tra/cập nhật trạng thái phiếu"
-
-    not_exported_enough_stock_mask = not_exported_enough_stock_mask & ~not_exported_no_qty_mask
-    not_exported_need_transfer_mask = not_exported_need_transfer_mask & ~not_exported_no_qty_mask
-    not_exported_missing_stock_mask = not_exported_missing_stock_mask & ~not_exported_no_qty_mask
-
-    r.loc[not_exported_enough_stock_mask, "Tình trạng"] = "Chưa xuất kho - đủ tồn kho hiện tại"
-    r.loc[not_exported_enough_stock_mask, "Gợi ý xử lý"] = "Tồn kho DA CN hiện tại đủ, thực hiện xuất kho để Status = 12"
-
-    r.loc[not_exported_need_transfer_mask, "Tình trạng"] = "Chưa xuất kho - cần chuyển kho/dự án"
-    r.loc[not_exported_need_transfer_mask, "Gợi ý xử lý"] = r.loc[not_exported_need_transfer_mask, "Gợi ý chuyển WBS"].fillna("")
-
-    r.loc[not_exported_missing_stock_mask, "Tình trạng"] = "Chưa xuất kho - thiếu tồn kho MB52"
-    r.loc[not_exported_missing_stock_mask, "Gợi ý xử lý"] = "Thiếu toàn bộ các tầng kho, cần bổ sung tồn kho hoặc điều chuyển ngoài phạm vi MB52 hiện tại"
-
-    r["Đảm bảo 100%"] = exported & enough_actual
-    return r
+    return report_df.copy()
 
 
 def build_conclusion_sheet(total: int, ok: int, not_ok: int, mb52_meta: Dict[str, str]) -> pd.DataFrame:
